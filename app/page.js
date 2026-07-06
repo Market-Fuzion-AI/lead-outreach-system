@@ -3,18 +3,29 @@
 import { useEffect, useState } from "react";
 import { STATUS_OPTIONS, toCSV } from "../lib/schema";
 
+const PRESETS = [
+  "Fitness", "Med Spa / Aesthetics", "Dental", "Chiropractic", "Roofing",
+  "HVAC / Plumbing / Electrical", "Legal", "Real Estate", "Coaching",
+  "Restaurants", "Auto Detailing", "Home Services", "Beauty / Salon",
+  "Wellness", "Photography", "Custom",
+];
+
 const tempClass = (t) =>
   t === "Hot Lead" ? "hot" : t === "Good Lead" ? "good" : t === "Maybe" ? "maybe" : "skip";
 
 const trustClass = (t) =>
   t === "High" ? "high" : t === "Medium" ? "medium" : "low";
 
-// Ensure a URL is clickable; show a friendly host label.
 const extUrl = (u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
 const hostOf = (u) => {
   try { return new URL(extUrl(u)).hostname.replace(/^www\./, ""); }
   catch { return u; }
 };
+
+const confLabel = (c) =>
+  c === "high" ? "High confidence" : c === "medium" ? "Possible match" : "Weak match — verify manually";
+const confKind = (c) =>
+  c === "high" ? "verified" : c === "medium" ? "social" : "review";
 
 function Badge({ kind, children }) {
   return <span className={`badge ${kind}`}>{children}</span>;
@@ -22,7 +33,9 @@ function Badge({ kind, children }) {
 
 export default function Page() {
   const [form, setForm] = useState({
-    niche: "personal trainer",
+    categoryPreset: "Fitness",
+    customCategory: "",
+    keywords: "yoga studio, pilates, personal training",
     location: "Fairfax, VA",
     maxResults: 20,
     excludedFranchises: "Orangetheory, Planet Fitness, LA Fitness, Anytime Fitness, Gold's Gym",
@@ -34,7 +47,6 @@ export default function Page() {
   const [openRow, setOpenRow] = useState(null);
   const [theme, setTheme] = useState("light");
 
-  // Reflect the theme chosen by the pre-paint script (layout.js).
   useEffect(() => {
     const current = document.documentElement.getAttribute("data-theme") || "light";
     setTheme(current);
@@ -48,6 +60,7 @@ export default function Page() {
   }
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const effectiveCategory = form.categoryPreset === "Custom" ? form.customCategory : form.categoryPreset;
 
   async function runSearch() {
     setLoading(true);
@@ -60,7 +73,8 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          niche: form.niche,
+          category: effectiveCategory,
+          keywords: form.keywords,
           location: form.location,
           maxResults: Number(form.maxResults),
           excludedFranchises: form.excludedFranchises,
@@ -88,7 +102,7 @@ export default function Page() {
     const a = document.createElement("a");
     const stamp = new Date().toISOString().slice(0, 10);
     a.href = url;
-    a.download = `mf_leads_${form.niche.replace(/\s+/g, "_")}_${stamp}.csv`;
+    a.download = `mf_leads_${(effectiveCategory || "leads").replace(/\s+/g, "_")}_${stamp}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -108,8 +122,21 @@ export default function Page() {
       <div className="panel">
         <div className="form-grid">
           <div className="field">
-            <label>Niche</label>
-            <input value={form.niche} onChange={(e) => set("niche", e.target.value)} placeholder="personal trainer" />
+            <label>Business Category / Niche</label>
+            <select value={form.categoryPreset} onChange={(e) => set("categoryPreset", e.target.value)}>
+              {PRESETS.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          {form.categoryPreset === "Custom" && (
+            <div className="field">
+              <label>Custom Category</label>
+              <input value={form.customCategory} onChange={(e) => set("customCategory", e.target.value)} placeholder="e.g. Pet Grooming" />
+            </div>
+          )}
+          <div className="field full">
+            <label>Specific Keywords (comma-separated)</label>
+            <input value={form.keywords} onChange={(e) => set("keywords", e.target.value)} placeholder="yoga studio, pilates, personal training" />
+            <div className="helper">Use Category for broad market, Keywords for specific business type. Example — Category: Fitness · Keywords: yoga studio, pilates, personal training.</div>
           </div>
           <div className="field">
             <label>Location</label>
@@ -119,7 +146,7 @@ export default function Page() {
             <label>Max Results (1–40)</label>
             <input type="number" min="1" max="40" value={form.maxResults} onChange={(e) => set("maxResults", e.target.value)} />
           </div>
-          <div className="field">
+          <div className="field full">
             <label>Excluded Franchises (comma-separated)</label>
             <input value={form.excludedFranchises} onChange={(e) => set("excludedFranchises", e.target.value)} />
           </div>
@@ -224,24 +251,46 @@ function FragmentRow({ lead, index, open, onToggle, onUpdate }) {
   );
 }
 
-function SocialRow({ label, url, match }) {
-  if (!url) {
+function CandidateRow({ c }) {
+  return (
+    <li className="cand-row">
+      <a className="ev-link" href={extUrl(c.url)} target="_blank" rel="noreferrer">{hostOf(c.url)}</a>
+      <Badge kind={confKind(c.confidence)}>{confLabel(c.confidence)}</Badge>
+      <div className="cand-meta">{c.matchReason}</div>
+    </li>
+  );
+}
+
+function SocialPlatform({ name, mainUrl, candidates }) {
+  if (!candidates || candidates.length === 0) {
     return (
-      <li className="ev-row">
-        <span className="ev-label">{label}</span>
-        <span className="ev-none">No confident match found</span>
-      </li>
+      <div className="social-plat">
+        <div className="social-head">{name}</div>
+        <div className="ev-none">No confident match found.</div>
+      </div>
     );
   }
-  const shared = match && Array.isArray(match.shared) ? match.shared : [];
-  const strong = match && match.strength === "strong";
+  const main = candidates.find((c) => c.url === mainUrl && c.confidence === "high") || null;
+  const rest = candidates.filter((c) => !main || c.url !== main.url);
   return (
-    <li className="ev-row">
-      <span className="ev-label">{label}</span>
-      <a className="ev-link" href={extUrl(url)} target="_blank" rel="noreferrer">{hostOf(url)}</a>
-      <Badge kind="social">{strong ? "Strong possible match" : "Possible match"}</Badge>
-      {shared.length > 0 && <span className="ev-reason">shared terms: {shared.join(", ")}</span>}
-    </li>
+    <div className="social-plat">
+      <div className="social-head">{name}</div>
+      {main ? (
+        <div className="cand-row main">
+          <span className="cand-lead">Main match</span>
+          <a className="ev-link" href={extUrl(main.url)} target="_blank" rel="noreferrer">{hostOf(main.url)}</a>
+          <Badge kind="verified">High confidence</Badge>
+          <div className="cand-meta">{main.matchReason}</div>
+        </div>
+      ) : (
+        <div className="social-warn">No high-confidence match — the items below are unverified guesses and require human review.</div>
+      )}
+      {rest.length > 0 && (
+        <ul className="cand-list">
+          {rest.map((c, i) => <CandidateRow key={i} c={c} />)}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -297,13 +346,21 @@ function EvidenceDrawer({ lead }) {
       <section className="sec">
         <div className="sec-head">
           <h4>Evidence Found</h4>
-          <Badge kind="social">Matched social profile</Badge>
+          <Badge kind="verified">Verified from Serper</Badge>
         </div>
-        <ul className="evidence">
-          <li className="ev-row"><span className="ev-label">Verified</span>{lead["Evidence Summary"]}</li>
-          <SocialRow label="Instagram" url={lead["Instagram"]} match={lead.igMatch} />
-          <SocialRow label="Facebook" url={lead["Facebook"]} match={lead.fbMatch} />
-        </ul>
+        <div className="field-line">{lead["Evidence Summary"]}</div>
+        <div className="ai-note">Social profiles are reviewed separately below — they are not counted as verified evidence.</div>
+      </section>
+
+      {/* Social Match Review */}
+      <section className="sec">
+        <div className="sec-head">
+          <h4>Social Match Review</h4>
+          <Badge kind="review">Human review required</Badge>
+        </div>
+        <SocialPlatform name="Instagram" mainUrl={lead["Instagram"]} candidates={lead.instagramCandidates || []} />
+        <SocialPlatform name="Facebook" mainUrl={lead["Facebook"]} candidates={lead.facebookCandidates || []} />
+        <div className="ai-note">Only a “High confidence” match is treated as the business’s real profile. Possible / weak matches are guesses — open and confirm each one before any outreach.</div>
       </section>
 
       {/* Why this score */}
