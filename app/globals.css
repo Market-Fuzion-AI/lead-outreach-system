@@ -271,29 +271,83 @@ tr.lead-row.is-open { background: var(--accent-weak); }
 .chip.active .chip-count { opacity: 0.85; }
 .empty-cell { text-align: center; color: var(--muted); padding: 26px; white-space: normal; }
 
-/* ---- Score ring ---- */
+/* ---- Premium score ring ---- */
+.ring-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; }
+.ring { filter: drop-shadow(0 2px 3px rgba(0,0,0,0.14)); }
 .ring-bg { stroke: var(--border); }
-.ring-fg { transition: stroke-dasharray 0.45s ease; }
-.ring.hot .ring-fg { stroke: var(--hot); }
-.ring.good .ring-fg { stroke: var(--good); }
-.ring.maybe .ring-fg { stroke: var(--maybe); }
-.ring.skip .ring-fg { stroke: var(--skip); }
-.ring-num { fill: var(--text); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ring-fg { transition: stroke-dasharray 0.5s ease; }
+.ring-num { fill: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ring-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.ring-label.hot { color: #ff2d55; }
+.ring-label.warm { color: #ff8a00; }
+.ring-label.cold { color: var(--accent); }
 
-.scorecell { display: flex; align-items: center; gap: 10px; }
-.scorecell-labels { display: flex; flex-direction: column; gap: 2px; }
-.temp-label { font-size: 12px; font-weight: 700; }
-.temp-label.hot { color: var(--hot); }
-.temp-label.good { color: var(--good); }
-.temp-label.maybe { color: var(--maybe); }
-.temp-label.skip { color: var(--skip); }
-.conf-label { font-size: 11px; color: var(--muted); }
 .move-label { font-weight: 600; font-size: 13px; }
+.contact-cell { display: flex; flex-direction: column; gap: 2px; }
+.contact-sub { font-size: 11px; color: var(--muted); }
+.chev-cell { text-align: right; width: 30px; }
+.chev { color: var(--muted); font-size: 12px; }
 
-/* ---- Approved indicator ---- */
-.approved-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; color: var(--verified); background: var(--verified-bg); padding: 3px 9px; border-radius: 999px; }
-.pending-pill { color: var(--muted); }
-tr.row-approved td:first-child { box-shadow: inset 3px 0 0 var(--verified); }
+/* ---- Status pills ---- */
+.status-pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+.status-pill.new { color: var(--muted); background: rgba(102,112,133,0.14); }
+.status-pill.reviewing { color: var(--accent); background: var(--accent-weak); }
+.status-pill.ready { color: var(--verified); background: var(--verified-bg); }
+.status-pill.contacted { color: var(--accent); background: var(--accent-weak); }
+.status-pill.followup { color: var(--social); background: var(--social-bg); }
+.status-pill.booked { color: var(--verified); background: var(--verified-bg); }
+.status-pill.notfit { color: var(--review); background: var(--review-bg); }
+
+/* Row status accent + approve flash */
+tr.lead-row.status-ready td:first-child,
+tr.lead-row.row-approved td:first-child { box-shadow: inset 3px 0 0 var(--verified); }
+tr.lead-row.status-contacted td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+tr.lead-row.status-followup td:first-child { box-shadow: inset 3px 0 0 var(--social); }
+tr.lead-row.status-booked td:first-child { box-shadow: inset 3px 0 0 var(--verified); }
+tr.lead-row.status-notfit td:first-child { box-shadow: inset 3px 0 0 var(--review); }
+@keyframes rowFlash { 0% { background: var(--verified-bg); } 100% { background: transparent; } }
+tr.lead-row.flash { animation: rowFlash 1.3s ease; }
+
+/* ---- Drawer: summary stats, status actions ---- */
+.summary-stats { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 8px; }
+.summary-stats span { display: flex; flex-direction: column; font-size: 13px; font-weight: 600; }
+.summary-stats em { font-style: normal; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; margin-bottom: 2px; }
+.status-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.approve-help { margin-top: 12px; font-size: 13px; font-weight: 600; color: var(--verified); background: var(--verified-bg); border-radius: 8px; padding: 9px 12px; }
+
+/* ---- Trust & Evidence cards ---- */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.card-h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+.kv { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+.kv:last-child { border-bottom: none; }
+.kv > span:first-child { color: var(--muted); flex-shrink: 0; }
+.kv b { font-weight: 600; text-align: right; word-break: break-word; }
+.kv a { color: var(--accent); text-decoration: none; word-break: break-all; text-align: right; }
+.kv a:hover { text-decoration: underline; }
+
+/* ---- Social Match Review (grouped) ---- */
+.smatch-group { margin-bottom: 14px; }
+.smatch-group:last-of-type { margin-bottom: 0; }
+.smatch-h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+.smatch { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.smatch:last-child { margin-bottom: 0; }
+.smatch.main { border-color: var(--verified); }
+.smatch-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.smatch-plat { font-weight: 700; font-size: 13px; }
+.smatch-type { font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; }
+.smatch-top .btn-link { margin-left: auto; }
+.smatch-reason { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.smatch-terms { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* ---- Recommended Opportunity + Best Move ---- */
+.opp { display: flex; flex-direction: column; gap: 10px; }
+.opp-row { display: grid; grid-template-columns: 140px 1fr; gap: 12px; font-size: 13px; line-height: 1.5; }
+.opp-k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; padding-top: 1px; }
+@media (max-width: 560px) { .opp-row { grid-template-columns: 1fr; gap: 2px; } }
+.move-box { background: var(--accent-weak); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+.move-big { font-size: 15px; font-weight: 700; }
+.move-why { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
 
 /* ---- Lead Summary (drawer A) ---- */
 .sec.summary { background: var(--panel); }

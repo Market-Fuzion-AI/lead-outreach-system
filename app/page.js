@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { STATUS_OPTIONS, toCSV } from "../lib/schema";
+import { toCSV } from "../lib/schema";
 
 const PRESETS = [
   "Fitness", "Med Spa / Aesthetics", "Dental", "Chiropractic", "Roofing",
@@ -17,44 +17,56 @@ const FILTERS = [
 
 const WORKFLOW = ["Search", "Review", "Approve", "Contact", "Export"];
 
-const tempClass = (t) =>
-  t === "Hot Lead" ? "hot" : t === "Good Lead" ? "good" : t === "Maybe" ? "maybe" : "skip";
-const trustClass = (t) =>
-  t === "High" ? "high" : t === "Medium" ? "medium" : "low";
-
 const extUrl = (u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
 const hostOf = (u) => {
   try { return new URL(extUrl(u)).hostname.replace(/^www\./, ""); }
   catch { return u; }
 };
 
-// Data confidence (1–5 model score) → human label.
+// Premium score bands (independent of the backend temperature label).
+const scoreBand = (s) => (s >= 90 ? "hot" : s >= 65 ? "warm" : "cold");
+const bandLabel = (b) => (b === "hot" ? "Red Hot" : b === "warm" ? "Warm" : "Cold");
+
 const dataConfidence = (score) =>
   score >= 4 ? "High Confidence" : score >= 3 ? "Medium Confidence" : "Low Confidence";
 
-// Social match labels — never imply a possible match is official.
+// Social labels — prefer "High Confidence / Likely" over "Verified".
 const socialLabel = (c) =>
-  c === "high" ? "Verified / High Confidence"
-    : c === "medium" ? "Possible Match — Review manually"
-      : "Weak Match — Do not use without review";
+  c === "high" ? "High Confidence Match"
+    : c === "medium" ? "Likely Match — review manually"
+      : "Weak Match — do not use without review";
 const socialKind = (c) => (c === "high" ? "verified" : c === "medium" ? "social" : "review");
+const linkTypeLabel = (t) =>
+  t === "profile" ? "Profile" : t === "page" ? "Page" : t === "post" ? "Post" : t === "video" ? "Video" : "Link";
 
 const displayChannel = (ch) => (ch === "Facebook Messenger" ? "Facebook Message" : ch);
 
-// Best First Move: never surface a DM as the first move unless that platform is
-// a high-confidence match; fall back to a safe, verifiable channel otherwise.
+// Best First Move: only surface a DM when a real profile/page main link exists.
 function bestFirstMove(lead) {
   const ch = lead["Recommended Channel"];
-  if (ch === "Instagram DM" && lead["Instagram Match Confidence"] !== "high") {
-    return lead["Website"] ? "Website Form" : "Phone/Text";
-  }
-  if (ch === "Facebook Messenger" && lead["Facebook Match Confidence"] !== "high") {
-    return lead["Website"] ? "Website Form" : "Phone/Text";
-  }
+  if (ch === "Instagram DM" && !lead["Instagram"]) return lead["Website"] ? "Website Form" : "Phone/Text";
+  if (ch === "Facebook Messenger" && !lead["Facebook"]) return lead["Website"] ? "Website Form" : "Phone/Text";
   return displayChannel(ch);
 }
 
-// Plain-English reason the lead is worth a look — built from existing data only.
+function bestMoveReason(lead) {
+  const move = bestFirstMove(lead);
+  if (move === "Instagram DM") return "A high-confidence Instagram profile was found.";
+  if (move === "Facebook Message") return "A high-confidence Facebook page was found.";
+  if (move === "Website Form") {
+    return lead["Website"]
+      ? "Website is available with a likely contact path, and the social match is not high-confidence."
+      : "Website form is the safest verifiable first channel.";
+  }
+  if (move === "Phone/Text") {
+    return lead["Phone"]
+      ? "Phone is available; no high-confidence website or social profile to use first."
+      : "Limited public contact data — verify before reaching out.";
+  }
+  if (move === "Email") return "Email is the available direct channel.";
+  return "Based on the available public data.";
+}
+
 function whyThisLead(lead) {
   const trust = String(lead["Trust Level"]).toLowerCase();
   const conf = dataConfidence(lead["Confidence Score"]).toLowerCase();
@@ -64,11 +76,16 @@ function whyThisLead(lead) {
   if (lead["Likely Lead Gap"] && lead["Likely Lead Gap"] !== "Unknown") {
     parts.push(`Likely gap: ${lead["Likely Lead Gap"]}`);
   }
-  if (lead["Automation Opportunity"] && lead["Automation Opportunity"] !== "Unknown") {
-    parts.push(`Where we could help: ${lead["Automation Opportunity"]}`);
-  }
+  if (lead.opportunity?.offer) parts.push(`Where we could help: ${lead.opportunity.offer}`);
   return parts.join(" ");
 }
+
+const STATUS_SLUG = {
+  "New": "new", "Reviewing": "reviewing", "Ready to Contact": "ready",
+  "Contacted": "contacted", "Follow-Up Needed": "followup",
+  "Booked Call": "booked", "Not a Fit": "notfit",
+};
+const statusSlug = (s) => STATUS_SLUG[s] || "new";
 
 function matchesFilter(lead, filter) {
   switch (filter) {
@@ -82,28 +99,39 @@ function matchesFilter(lead, filter) {
   }
 }
 
+// Split a platform's candidates into main / supporting posts / other possible.
+function groupSocial(mainUrl, candidates) {
+  const main = candidates.find((c) => c.url === mainUrl) || null;
+  const rest = candidates.filter((c) => c !== main);
+  const posts = rest.filter((c) => c.linkType === "post" || c.linkType === "video");
+  const others = rest.filter((c) => c.linkType !== "post" && c.linkType !== "video");
+  return { main, posts, others };
+}
+
 function Badge({ kind, children }) {
   return <span className={`badge ${kind}`}>{children}</span>;
 }
 
-// Circular Apple-Fitness-style score ring.
-function ScoreRing({ score, temp, size = 46 }) {
-  const stroke = 4;
+function ScoreRing({ score, size = 46, showLabel = false }) {
+  const band = scoreBand(score);
+  const stroke = size >= 60 ? 6 : 4;
   const r = (size - stroke) / 2 - 1;
   const c = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(100, Number(score) || 0)) / 100;
-  const dash = c * pct;
   const mid = size / 2;
   return (
-    <svg className={`ring ${tempClass(temp)}`} width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <circle className="ring-bg" cx={mid} cy={mid} r={r} strokeWidth={stroke} fill="none" />
-      <circle
-        className="ring-fg" cx={mid} cy={mid} r={r} strokeWidth={stroke} fill="none"
-        strokeDasharray={`${dash} ${c - dash}`} strokeLinecap="round"
-        transform={`rotate(-90 ${mid} ${mid})`}
-      />
-      <text className="ring-num" x={mid} y={mid} dominantBaseline="central" textAnchor="middle">{score}</text>
-    </svg>
+    <div className={`ring-wrap ${band}`}>
+      <svg className="ring" width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle className="ring-bg" cx={mid} cy={mid} r={r} strokeWidth={stroke} fill="none" />
+        <circle
+          className="ring-fg" cx={mid} cy={mid} r={r} strokeWidth={stroke} fill="none"
+          stroke={`url(#mf-grad-${band})`} strokeLinecap="round"
+          strokeDasharray={`${c * pct} ${c - c * pct}`} transform={`rotate(-90 ${mid} ${mid})`}
+        />
+        <text className="ring-num" x={mid} y={mid} dominantBaseline="central" textAnchor="middle" style={{ fontSize: size >= 60 ? 20 : 14 }}>{score}</text>
+      </svg>
+      {showLabel && <span className={`ring-label ${band}`}>{bandLabel(band)}</span>}
+    </div>
   );
 }
 
@@ -126,6 +154,24 @@ function CopyButton({ label, text }) {
   );
 }
 
+function GradientDefs() {
+  return (
+    <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
+      <defs>
+        <linearGradient id="mf-grad-hot" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#ff8095" /><stop offset="100%" stopColor="#ff2d55" />
+        </linearGradient>
+        <linearGradient id="mf-grad-warm" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#ffd27a" /><stop offset="100%" stopColor="#ff8a00" />
+        </linearGradient>
+        <linearGradient id="mf-grad-cold" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#6db3ff" /><stop offset="100%" stopColor="#0071e3" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
 export default function Page() {
   const [form, setForm] = useState({
     categoryPreset: "Fitness",
@@ -141,6 +187,7 @@ export default function Page() {
   const [error, setError] = useState("");
   const [openRow, setOpenRow] = useState(null);
   const [filter, setFilter] = useState("All");
+  const [flashId, setFlashId] = useState(null);
   const [theme, setTheme] = useState("light");
 
   useEffect(() => {
@@ -187,17 +234,18 @@ export default function Page() {
     }
   }
 
-  function updateLead(index, key, value) {
-    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, [key]: value } : l)));
+  function setStatus(index, status) {
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Status": status } : l)));
   }
 
-  // Approve = mark approved AND advance the pipeline stage. Client-side only.
   function approveLead(index) {
     setLeads((prev) =>
       prev.map((l, i) =>
         i === index ? { ...l, "Approved To Contact": "YES", "Status": "Ready to Contact" } : l
       )
     );
+    setFlashId(index);
+    setTimeout(() => setFlashId((cur) => (cur === index ? null : cur)), 1300);
   }
 
   function exportCSV() {
@@ -216,6 +264,7 @@ export default function Page() {
 
   return (
     <div className="wrap">
+      <GradientDefs />
       <div className="topbar">
         <div className="brand">
           <h1>Market Fuzion — Prospecting Command Center</h1>
@@ -282,7 +331,7 @@ export default function Page() {
 
           {meta && (
             <div className="meta">
-              Found {meta.found} · removed {meta.removedFranchises} franchise{meta.removedFranchises === 1 ? "" : "s"} · analyzed {meta.analyzed}. Sorted by score. Click a row to review, approve, and copy outreach.
+              Found {meta.found} · removed {meta.removedFranchises} franchise{meta.removedFranchises === 1 ? "" : "s"} · analyzed {meta.analyzed}. Click a lead to review, approve, and copy outreach.
             </div>
           )}
 
@@ -290,11 +339,7 @@ export default function Page() {
             {FILTERS.map((f) => {
               const count = f === "All" ? leads.length : leads.filter((l) => matchesFilter(l, f)).length;
               return (
-                <button
-                  key={f}
-                  className={`chip${filter === f ? " active" : ""}`}
-                  onClick={() => setFilter(f)}
-                >
+                <button key={f} className={`chip${filter === f ? " active" : ""}`} onClick={() => setFilter(f)}>
                   {f} <span className="chip-count">{count}</span>
                 </button>
               );
@@ -305,18 +350,17 @@ export default function Page() {
             <table>
               <thead>
                 <tr>
-                  <th>Business</th>
-                  <th>Location</th>
-                  <th>Phone</th>
+                  <th>Lead</th>
+                  <th>Contact</th>
                   <th>Lead Score</th>
                   <th>Best First Move</th>
                   <th>Status</th>
-                  <th>Approved</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
                 {shown.length === 0 ? (
-                  <tr><td colSpan={7} className="empty-cell">No leads match “{filter}”.</td></tr>
+                  <tr><td colSpan={6} className="empty-cell">No leads match “{filter}”.</td></tr>
                 ) : (
                   shown.map(({ l, i }) => (
                     <FragmentRow
@@ -324,9 +368,10 @@ export default function Page() {
                       lead={l}
                       index={i}
                       open={openRow === i}
+                      flash={flashId === i}
                       onToggle={() => setOpenRow(openRow === i ? null : i)}
-                      onUpdate={updateLead}
                       onApprove={approveLead}
+                      onStatus={setStatus}
                     />
                   ))
                 )}
@@ -339,44 +384,36 @@ export default function Page() {
   );
 }
 
-function FragmentRow({ lead, index, open, onToggle, onUpdate, onApprove }) {
+function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus }) {
   const approved = lead["Approved To Contact"] === "YES";
+  const slug = statusSlug(lead["Status"]);
   return (
     <>
-      <tr className={`lead-row${open ? " is-open" : ""}${approved ? " row-approved" : ""}`} onClick={onToggle}>
+      <tr
+        className={`lead-row status-${slug}${open ? " is-open" : ""}${approved ? " row-approved" : ""}${flash ? " flash" : ""}`}
+        onClick={onToggle}
+      >
         <td>
           <div className="biz-cell">
             <span className="biz-name">{lead["Business Name"]}</span>
-            <span className={`trust-chip ${trustClass(lead["Trust Level"])}`}>{lead["Trust Level"]} trust</span>
+            <span className={`trust-chip ${String(lead["Trust Level"]).toLowerCase()}`}>{lead["Trust Level"]} trust</span>
           </div>
         </td>
-        <td>{lead["Location"]}</td>
-        <td>{lead["Phone"]}</td>
         <td>
-          <div className="scorecell">
-            <ScoreRing score={lead["Fit Score"]} temp={lead["Lead Temperature"]} />
-            <div className="scorecell-labels">
-              <span className={`temp-label ${tempClass(lead["Lead Temperature"])}`}>{lead["Lead Temperature"]}</span>
-              <span className="conf-label">{dataConfidence(lead["Confidence Score"])}</span>
-            </div>
+          <div className="contact-cell">
+            <span>{lead["Phone"] || "—"}</span>
+            <span className="contact-sub">{lead["Location"]}</span>
           </div>
         </td>
+        <td><ScoreRing score={lead["Fit Score"]} showLabel /></td>
         <td><span className="move-label">{bestFirstMove(lead)}</span></td>
-        <td onClick={(e) => e.stopPropagation()}>
-          <select value={lead["Status"]} onChange={(e) => onUpdate(index, "Status", e.target.value)}>
-            {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </td>
-        <td>
-          {approved
-            ? <span className="approved-pill">✓ Approved</span>
-            : <span className="pending-pill">—</span>}
-        </td>
+        <td><span className={`status-pill ${slug}`}>{lead["Status"]}</span></td>
+        <td className="chev-cell"><span className="chev">{open ? "▾" : "▸"}</span></td>
       </tr>
       {open && (
         <tr className="detail">
-          <td colSpan={7}>
-            <EvidenceDrawer lead={lead} index={index} onApprove={onApprove} />
+          <td colSpan={6}>
+            <EvidenceDrawer lead={lead} index={index} onApprove={onApprove} onStatus={onStatus} />
           </td>
         </tr>
       )}
@@ -384,41 +421,56 @@ function FragmentRow({ lead, index, open, onToggle, onUpdate, onApprove }) {
   );
 }
 
-function SocialPlatform({ name, mainUrl, candidates }) {
-  if (!candidates || candidates.length === 0) {
-    return (
-      <div className="social-plat">
-        <div className="social-head">{name}</div>
-        <div className="ev-none">No confident match found.</div>
-      </div>
-    );
-  }
-  const main = candidates.find((c) => c.url === mainUrl && c.confidence === "high") || null;
-  const rest = candidates.filter((c) => !main || c.url !== main.url);
+function CandidateItem({ platform, c, isMain }) {
   return (
-    <div className="social-plat">
-      <div className="social-head">{name}</div>
-      {main ? (
-        <div className="cand-row main">
-          <a className="ev-link" href={extUrl(main.url)} target="_blank" rel="noreferrer">{hostOf(main.url)}</a>
-          <Badge kind="verified">{socialLabel("high")}</Badge>
-          <div className="cand-meta">{main.matchReason}</div>
-        </div>
-      ) : (
-        <div className="social-warn">No high-confidence match — the items below are unverified guesses and require human review.</div>
-      )}
-      {rest.length > 0 && (
-        <ul className="cand-list">
-          {rest.map((c, i) => (
-            <li className="cand-row" key={i}>
-              <a className="ev-link" href={extUrl(c.url)} target="_blank" rel="noreferrer">{hostOf(c.url)}</a>
-              <Badge kind={socialKind(c.confidence)}>{socialLabel(c.confidence)}</Badge>
-              <div className="cand-meta">{c.matchReason}</div>
-            </li>
-          ))}
-        </ul>
+    <div className={`smatch${isMain ? " main" : ""}`}>
+      <div className="smatch-top">
+        <span className="smatch-plat">{platform}</span>
+        <span className="smatch-type">{linkTypeLabel(c.linkType)}</span>
+        <Badge kind={socialKind(c.confidence)}>{socialLabel(c.confidence)}</Badge>
+        <a className="btn-link sm" href={extUrl(c.url)} target="_blank" rel="noreferrer">Open</a>
+      </div>
+      <div className="smatch-reason">{c.matchReason}</div>
+      {c.sharedDistinctiveTerms?.length > 0 && (
+        <div className="smatch-terms">Shared terms: {c.sharedDistinctiveTerms.join(", ")}</div>
       )}
     </div>
+  );
+}
+
+function SocialMatchReview({ lead }) {
+  const ig = groupSocial(lead["Instagram"], lead.instagramCandidates || []);
+  const fb = groupSocial(lead["Facebook"], lead.facebookCandidates || []);
+  const tag = (platform, arr) => arr.map((c) => ({ platform, c }));
+
+  const mains = [
+    ...(ig.main ? tag("Instagram", [ig.main]) : []),
+    ...(fb.main ? tag("Facebook", [fb.main]) : []),
+  ];
+  const posts = [...tag("Instagram", ig.posts), ...tag("Facebook", fb.posts)];
+  const others = [...tag("Instagram", ig.others), ...tag("Facebook", fb.others)];
+
+  return (
+    <>
+      <div className="smatch-group">
+        <div className="smatch-h">Main Profile / Page Match</div>
+        {mains.length
+          ? mains.map(({ platform, c }, i) => <CandidateItem key={i} platform={platform} c={c} isMain />)
+          : <div className="ev-none">No high-confidence profile or page match — manual review required.</div>}
+      </div>
+      <div className="smatch-group">
+        <div className="smatch-h">Supporting Posts Found</div>
+        {posts.length
+          ? posts.map(({ platform, c }, i) => <CandidateItem key={i} platform={platform} c={c} />)
+          : <div className="ev-none">None.</div>}
+      </div>
+      <div className="smatch-group">
+        <div className="smatch-h">Other Possible Matches</div>
+        {others.length
+          ? others.map(({ platform, c }, i) => <CandidateItem key={i} platform={platform} c={c} />)
+          : <div className="ev-none">None.</div>}
+      </div>
+    </>
   );
 }
 
@@ -434,35 +486,46 @@ function Draft({ title, text }) {
   );
 }
 
-function EvidenceDrawer({ lead, index, onApprove }) {
+function socialStatus(mainUrl, cands) {
+  if (mainUrl) return { text: "High Confidence Match", kind: "verified" };
+  if (cands.length) return { text: "Needs review", kind: "social" };
+  return { text: "No confident match", kind: "review" };
+}
+
+function EvidenceDrawer({ lead, index, onApprove, onStatus }) {
   const website = lead["Website"];
   const approved = lead["Approved To Contact"] === "YES";
   const breakdown = Array.isArray(lead.scoreBreakdown) ? lead.scoreBreakdown : [];
+  const opp = lead.opportunity;
+  const igStatus = socialStatus(lead["Instagram"], lead.instagramCandidates || []);
+  const fbStatus = socialStatus(lead["Facebook"], lead.facebookCandidates || []);
 
   return (
     <div className="drawer">
       {/* A. Lead Summary */}
       <section className="sec summary">
         <div className="summary-main">
-          <ScoreRing score={lead["Fit Score"]} temp={lead["Lead Temperature"]} size={64} />
+          <ScoreRing score={lead["Fit Score"]} size={72} showLabel />
           <div className="summary-info">
             <div className="summary-name">{lead["Business Name"]}</div>
-            <div className="summary-sub">
-              <span className={`pill ${tempClass(lead["Lead Temperature"])}`}>{lead["Lead Temperature"]}</span>
-              <span className="chip-muted">{dataConfidence(lead["Confidence Score"])}</span>
-              <span className={`trust-chip ${trustClass(lead["Trust Level"])}`}>{lead["Trust Level"]} trust</span>
+            <div className="summary-stats">
+              <span><em>Temperature</em>{lead["Lead Temperature"]}</span>
+              <span><em>Trust</em>{lead["Trust Level"]}</span>
+              <span><em>Confidence</em>{dataConfidence(lead["Confidence Score"])}</span>
             </div>
-            <div className="summary-move">Best first move: <strong>{bestFirstMove(lead)}</strong></div>
           </div>
           <div className="spacer" />
-          <button
-            className={`btn-approve${approved ? " done" : ""}`}
-            onClick={() => onApprove(index)}
-            disabled={approved}
-          >
+          <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => onApprove(index)} disabled={approved}>
             {approved ? "✓ Approved" : "Approve Lead"}
           </button>
         </div>
+        <div className="status-actions">
+          <button className="secondary sm" onClick={() => onStatus(index, "Contacted")}>Mark Contacted</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Follow-Up Needed")}>Follow-Up Needed</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Booked Call")}>Booked Call</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Not a Fit")}>Not a Fit</button>
+        </div>
+        {approved && <div className="approve-help">✓ This lead is now in your Ready to Contact queue.</div>}
       </section>
 
       {/* B. Why This Lead */}
@@ -471,55 +534,79 @@ function EvidenceDrawer({ lead, index, onApprove }) {
         <div className="field-line">{whyThisLead(lead)}</div>
       </section>
 
-      {/* C. Trust & Evidence */}
+      {/* C. Trust & Evidence — compact cards */}
       <section className="sec">
         <div className="sec-head">
           <h4>Trust &amp; Evidence</h4>
-          <Badge kind="verified">Verified from Serper</Badge>
+          <Badge kind="verified">Public data via Serper</Badge>
         </div>
-        <div className="snapshot">
-          <div className="snap-item"><span className="k">Category</span>{lead.category || "—"}</div>
-          <div className="snap-item"><span className="k">Location</span>{lead["Location"] || "—"}</div>
-          <div className="snap-item"><span className="k">Phone</span>{lead["Phone"] || "—"}</div>
-          <div className="snap-item">
-            <span className="k">Website</span>
-            {website ? <a href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a> : "—"}
+        <div className="cards">
+          <div className="card">
+            <div className="card-h">Business Info</div>
+            <div className="kv"><span>Category</span><b>{lead.category || "—"}</b></div>
+            <div className="kv"><span>Business name</span><b>{lead["Business Name"]}</b></div>
+            <div className="kv"><span>Location</span><b>{lead["Location"] || "—"}</b></div>
           </div>
-          <div className="snap-item">
-            <span className="k">Google Rating</span>
-            {lead.rating !== "" && lead.rating != null
-              ? `${lead.rating}★${lead.reviews !== "" && lead.reviews != null ? ` · ${lead.reviews} reviews` : ""}`
-              : "—"}
+          <div className="card">
+            <div className="card-h">Contact Info</div>
+            <div className="kv"><span>Phone</span><b>{lead["Phone"] || "—"}</b></div>
+            <div className="kv"><span>Website</span>{website ? <a href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a> : <b>—</b>}</div>
+            <div className="kv"><span>Email</span><b>{lead["Email"] || "Not available"}</b></div>
+          </div>
+          <div className="card">
+            <div className="card-h">Public Signals</div>
+            <div className="kv"><span>Rating</span><b>{lead.rating !== "" && lead.rating != null ? `${lead.rating}★` : "—"}</b></div>
+            <div className="kv"><span>Reviews</span><b>{lead.reviews !== "" && lead.reviews != null ? lead.reviews : "—"}</b></div>
+            <div className="kv"><span>Source</span><b>Serper / Google public data</b></div>
+          </div>
+          <div className="card">
+            <div className="card-h">Social Evidence</div>
+            <div className="kv"><span>Instagram</span><Badge kind={igStatus.kind}>{igStatus.text}</Badge></div>
+            <div className="kv"><span>Facebook</span><Badge kind={fbStatus.kind}>{fbStatus.text}</Badge></div>
+            <div className="kv"><span>Human review</span><b>Needed</b></div>
           </div>
         </div>
-        <div className="field-line"><span className="k">Verified data: </span>{lead["Evidence Summary"]}</div>
-
-        <div className="social-review">
-          <div className="social-title">Social match status</div>
-          <SocialPlatform name="Instagram" mainUrl={lead["Instagram"]} candidates={lead.instagramCandidates || []} />
-          <SocialPlatform name="Facebook" mainUrl={lead["Facebook"]} candidates={lead.facebookCandidates || []} />
-        </div>
-        <div className="ai-note">Only a “Verified / High Confidence” match is treated as the business’s real profile. Possible / weak matches are guesses — confirm each one manually before any outreach. Nothing is sent automatically.</div>
       </section>
 
-      {/* D. Opportunity */}
+      {/* D. Social Match Review — grouped */}
       <section className="sec">
         <div className="sec-head">
-          <h4>Opportunity</h4>
-          <Badge kind="ai">AI-generated recommendation</Badge>
+          <h4>Social Match Review</h4>
+          <Badge kind="review">Human review required</Badge>
         </div>
-        <div className="field-line"><span className="k">Likely Lead Gap: </span>{lead["Likely Lead Gap"]}</div>
-        <div className="field-line"><span className="k">Likely Follow-Up Gap: </span>{lead["Likely Follow-Up Gap"]}</div>
-        <div className="field-line"><span className="k">Automation Opportunity: </span>{lead["Automation Opportunity"]}</div>
+        <SocialMatchReview lead={lead} />
+        <div className="ai-note">A social link becomes the main profile only on a high-confidence profile/page match. Posts and weak matches are supporting evidence — confirm manually before any outreach.</div>
       </section>
 
-      {/* E. Suggested Outreach */}
+      {/* E. Recommended Opportunity */}
+      <section className="sec">
+        <div className="sec-head">
+          <h4>Recommended Opportunity</h4>
+          <Badge kind="ai">AI-generated recommendation</Badge>
+        </div>
+        {opp && (opp.problem || opp.offer || opp.why || opp.firstOffer) ? (
+          <div className="opp">
+            {opp.problem && <div className="opp-row"><span className="opp-k">Problem</span><span>{opp.problem}</span></div>}
+            {opp.offer && <div className="opp-row"><span className="opp-k">Possible offer</span><span>{opp.offer}</span></div>}
+            {opp.why && <div className="opp-row"><span className="opp-k">Why it matters</span><span>{opp.why}</span></div>}
+            {opp.firstOffer && <div className="opp-row"><span className="opp-k">Suggested first offer</span><span>{opp.firstOffer}</span></div>}
+          </div>
+        ) : (
+          <div className="field-line">{lead["Automation Opportunity"]}</div>
+        )}
+        <div className="ai-note">Based on available public data only. Uses “may” / “likely” — verify before pitching.</div>
+      </section>
+
+      {/* F. Suggested Outreach */}
       <section className="sec">
         <div className="sec-head">
           <h4>Suggested Outreach</h4>
           <Badge kind="review">Human review required</Badge>
         </div>
-        <div className="field-line"><span className="k">Recommended first move: </span>{bestFirstMove(lead)}</div>
+        <div className="move-box">
+          <div className="move-big">{bestFirstMove(lead)}</div>
+          <div className="move-why">{bestMoveReason(lead)}</div>
+        </div>
 
         <div className="actions">
           {website && <a className="btn-link" href={extUrl(website)} target="_blank" rel="noreferrer">Open Website</a>}
@@ -534,7 +621,7 @@ function EvidenceDrawer({ lead, index, onApprove }) {
         <div className="ai-note">These drafts are AI-generated suggestions. Review and edit before any manual outreach.</div>
       </section>
 
-      {/* F. Score Breakdown */}
+      {/* G. Score Breakdown */}
       <section className="sec">
         <div className="sec-head">
           <h4>Score Breakdown</h4>

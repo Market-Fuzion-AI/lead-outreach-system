@@ -66,17 +66,12 @@ function trustFrom(b) {
   return { level, summary: ev.join(", ") || "Limited public data" };
 }
 
-const CONF_RANK = { high: 3, medium: 2, low: 1, none: 0 };
-
-// Overall social evidence level, from the best candidate across both platforms.
-function socialEvidenceLevel(igCands = [], fbCands = []) {
-  const best = Math.max(
-    CONF_RANK[igCands[0]?.confidence] || 0,
-    CONF_RANK[fbCands[0]?.confidence] || 0
-  );
-  if (best >= 3) return "high";
-  if (best >= 1) return "possible";
-  return "none";
+// Social evidence level: "high" only when a real profile/page main link was
+// promoted; "possible" when we only have supporting/weak candidates; else "none".
+function socialEvidenceLevel(social = {}) {
+  if (social.instagram || social.facebook) return "high";
+  const has = (social.instagramCandidates || []).length || (social.facebookCandidates || []).length;
+  return has ? "possible" : "none";
 }
 
 // Human-readable "possible match" line for CSV — never claims "official".
@@ -92,12 +87,13 @@ function possibleMatchText(cands = []) {
 
 const candidateLinks = (cands = []) => cands.map((c) => c.url).join(" | ");
 
-function socialMatchNotes(igCands = [], fbCands = []) {
-  const line = (label, cands) => {
+function socialMatchNotes(social = {}) {
+  const line = (label, mainUrl, cands) => {
+    if (mainUrl) return `${label}: high-confidence profile/page match (${mainUrl})`;
     const c = cands[0];
-    return c ? `${label}: ${c.confidence} (${c.matchReason})` : `${label}: no candidate found`;
+    return c ? `${label}: ${c.confidence} ${c.linkType} — ${c.matchReason}` : `${label}: no candidate found`;
   };
-  return `${line("Instagram", igCands)}. ${line("Facebook", fbCands)}.`;
+  return `${line("Instagram", social.instagram, social.instagramCandidates || [])}. ${line("Facebook", social.facebook, social.facebookCandidates || [])}.`;
 }
 
 function confidenceExplanation(evidence) {
@@ -131,8 +127,24 @@ function scoreWhy(breakdown) {
   return `Strongest signals: ${top.join(" and ")}. Weakest: ${low.label} (${low.score}/${low.max}). AI estimate from public data — verify before outreach.`;
 }
 
+// Structured "Recommended Opportunity" from the model's hedged fields. The CSV
+// column keeps a single composed string; the UI gets the structured pieces.
+function composeOpportunity(ai) {
+  const problem = (ai.opportunity_problem || "").trim();
+  const offer = (ai.opportunity_offer || "").trim();
+  const why = (ai.opportunity_why || "").trim();
+  const firstOffer = (ai.opportunity_first_offer || "").trim();
+  const text = [
+    problem && `Problem: ${problem}`,
+    offer && `Possible offer: ${offer}`,
+    why && `Why it matters: ${why}`,
+    firstOffer && `Suggested first offer: ${firstOffer}`,
+  ].filter(Boolean).join(" | ");
+  return { problem, offer, why, firstOffer, text: text || "Unknown" };
+}
+
 // Build a lead object keyed by the schema COLUMNS, plus camelCase UI-only extras
-// (rating/reviews/category/scoreBreakdown/social match details) that never hit CSV.
+// (rating/reviews/category/scoreBreakdown/opportunity/social) that never hit CSV.
 function assembleLead(b, ai, niche, social = {}) {
   const noteBits = [];
   if (hasVal(b.rating)) noteBits.push(`${b.rating}★`);
@@ -142,9 +154,10 @@ function assembleLead(b, ai, niche, social = {}) {
   const trust = trustFrom(b);
   const igCands = social.instagramCandidates || [];
   const fbCands = social.facebookCandidates || [];
-  const igConf = igCands[0]?.confidence || "none";
-  const fbConf = fbCands[0]?.confidence || "none";
-  const evidence = socialEvidenceLevel(igCands, fbCands);
+  // Report the main-match confidence: "high" when a profile/page was promoted.
+  const igConf = social.instagram ? "high" : (igCands[0]?.confidence || "none");
+  const fbConf = social.facebook ? "high" : (fbCands[0]?.confidence || "none");
+  const evidence = socialEvidenceLevel(social);
 
   // Verified fields + trust/social columns shared by both success and failure.
   const base = {
@@ -167,7 +180,7 @@ function assembleLead(b, ai, niche, social = {}) {
     "Facebook Match Confidence": fbConf,
     "Instagram Candidate Links": candidateLinks(igCands),
     "Facebook Candidate Links": candidateLinks(fbCands),
-    "Social Match Notes": socialMatchNotes(igCands, fbCands),
+    "Social Match Notes": socialMatchNotes(social),
     // camelCase UI-only extras (not in COLUMNS, so excluded from CSV):
     rating: b.rating ?? "",
     reviews: b.reviews ?? "",
@@ -198,8 +211,11 @@ function assembleLead(b, ai, niche, social = {}) {
       "Notes": `AI analysis failed — retry this lead.${publicContext}`,
       scoreBreakdown: [],
       scoreWhy: "Not scored — AI analysis failed. Re-run to generate a score.",
+      opportunity: null,
     };
   }
+
+  const opp = composeOpportunity(ai);
 
   const breakdown = scoreBreakdown(ai);
   const total = breakdown.reduce((sum, x) => sum + x.score, 0);
@@ -216,7 +232,7 @@ function assembleLead(b, ai, niche, social = {}) {
     "Visible CTA": ai.visible_cta || "Unknown",
     "Likely Lead Gap": ai.likely_lead_gap || "Unknown",
     "Likely Follow-Up Gap": ai.likely_follow_up_gap || "Unknown",
-    "Automation Opportunity": ai.automation_opportunity || "Unknown",
+    "Automation Opportunity": opp.text,
     "Fit Score": total,
     "Lead Temperature": temperature(total),
     "Confidence Score": conf,
@@ -231,6 +247,7 @@ function assembleLead(b, ai, niche, social = {}) {
     "Notes": `${ai.notes || ""}${publicContext}`.trim(),
     scoreBreakdown: breakdown,
     scoreWhy: scoreWhy(breakdown),
+    opportunity: opp,
   };
 }
 
@@ -300,7 +317,7 @@ export async function POST(req) {
     } catch {
       /* leave social empty — the lead is still analyzed */
     }
-    const evidence = socialEvidenceLevel(social.instagramCandidates, social.facebookCandidates);
+    const evidence = socialEvidenceLevel(social);
 
     try {
       const ai = await analyzeLead({
