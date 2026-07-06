@@ -10,9 +10,15 @@ const PRESETS = [
   "Wellness", "Photography", "Custom",
 ];
 
+const FILTERS = [
+  "All", "Hot Leads", "High Trust", "Needs Social Review",
+  "Website Form", "Instagram DM", "Approved",
+];
+
+const WORKFLOW = ["Search", "Review", "Approve", "Contact", "Export"];
+
 const tempClass = (t) =>
   t === "Hot Lead" ? "hot" : t === "Good Lead" ? "good" : t === "Maybe" ? "maybe" : "skip";
-
 const trustClass = (t) =>
   t === "High" ? "high" : t === "Medium" ? "medium" : "low";
 
@@ -22,13 +28,102 @@ const hostOf = (u) => {
   catch { return u; }
 };
 
-const confLabel = (c) =>
-  c === "high" ? "High confidence" : c === "medium" ? "Possible match" : "Weak match — verify manually";
-const confKind = (c) =>
-  c === "high" ? "verified" : c === "medium" ? "social" : "review";
+// Data confidence (1–5 model score) → human label.
+const dataConfidence = (score) =>
+  score >= 4 ? "High Confidence" : score >= 3 ? "Medium Confidence" : "Low Confidence";
+
+// Social match labels — never imply a possible match is official.
+const socialLabel = (c) =>
+  c === "high" ? "Verified / High Confidence"
+    : c === "medium" ? "Possible Match — Review manually"
+      : "Weak Match — Do not use without review";
+const socialKind = (c) => (c === "high" ? "verified" : c === "medium" ? "social" : "review");
+
+const displayChannel = (ch) => (ch === "Facebook Messenger" ? "Facebook Message" : ch);
+
+// Best First Move: never surface a DM as the first move unless that platform is
+// a high-confidence match; fall back to a safe, verifiable channel otherwise.
+function bestFirstMove(lead) {
+  const ch = lead["Recommended Channel"];
+  if (ch === "Instagram DM" && lead["Instagram Match Confidence"] !== "high") {
+    return lead["Website"] ? "Website Form" : "Phone/Text";
+  }
+  if (ch === "Facebook Messenger" && lead["Facebook Match Confidence"] !== "high") {
+    return lead["Website"] ? "Website Form" : "Phone/Text";
+  }
+  return displayChannel(ch);
+}
+
+// Plain-English reason the lead is worth a look — built from existing data only.
+function whyThisLead(lead) {
+  const trust = String(lead["Trust Level"]).toLowerCase();
+  const conf = dataConfidence(lead["Confidence Score"]).toLowerCase();
+  const parts = [
+    `${lead["Lead Temperature"]} — scores ${lead["Fit Score"]}/100 with ${trust} trust and ${conf} in the public data.`,
+  ];
+  if (lead["Likely Lead Gap"] && lead["Likely Lead Gap"] !== "Unknown") {
+    parts.push(`Likely gap: ${lead["Likely Lead Gap"]}`);
+  }
+  if (lead["Automation Opportunity"] && lead["Automation Opportunity"] !== "Unknown") {
+    parts.push(`Where we could help: ${lead["Automation Opportunity"]}`);
+  }
+  return parts.join(" ");
+}
+
+function matchesFilter(lead, filter) {
+  switch (filter) {
+    case "Hot Leads": return lead["Lead Temperature"] === "Hot Lead";
+    case "High Trust": return lead["Trust Level"] === "High";
+    case "Needs Social Review": return lead.socialEvidence === "possible";
+    case "Website Form": return bestFirstMove(lead) === "Website Form";
+    case "Instagram DM": return bestFirstMove(lead) === "Instagram DM";
+    case "Approved": return lead["Approved To Contact"] === "YES";
+    default: return true;
+  }
+}
 
 function Badge({ kind, children }) {
   return <span className={`badge ${kind}`}>{children}</span>;
+}
+
+// Circular Apple-Fitness-style score ring.
+function ScoreRing({ score, temp, size = 46 }) {
+  const stroke = 4;
+  const r = (size - stroke) / 2 - 1;
+  const c = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, Number(score) || 0)) / 100;
+  const dash = c * pct;
+  const mid = size / 2;
+  return (
+    <svg className={`ring ${tempClass(temp)}`} width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle className="ring-bg" cx={mid} cy={mid} r={r} strokeWidth={stroke} fill="none" />
+      <circle
+        className="ring-fg" cx={mid} cy={mid} r={r} strokeWidth={stroke} fill="none"
+        strokeDasharray={`${dash} ${c - dash}`} strokeLinecap="round"
+        transform={`rotate(-90 ${mid} ${mid})`}
+      />
+      <text className="ring-num" x={mid} y={mid} dominantBaseline="central" textAnchor="middle">{score}</text>
+    </svg>
+  );
+}
+
+function CopyButton({ label, text }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      className="secondary sm"
+      disabled={!text}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text || "");
+          setDone(true);
+          setTimeout(() => setDone(false), 1200);
+        } catch { /* clipboard unavailable */ }
+      }}
+    >
+      {done ? "Copied ✓" : label}
+    </button>
+  );
 }
 
 export default function Page() {
@@ -45,11 +140,11 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [openRow, setOpenRow] = useState(null);
+  const [filter, setFilter] = useState("All");
   const [theme, setTheme] = useState("light");
 
   useEffect(() => {
-    const current = document.documentElement.getAttribute("data-theme") || "light";
-    setTheme(current);
+    setTheme(document.documentElement.getAttribute("data-theme") || "light");
   }, []);
 
   function toggleTheme() {
@@ -68,6 +163,7 @@ export default function Page() {
     setLeads([]);
     setMeta(null);
     setOpenRow(null);
+    setFilter("All");
     try {
       const res = await fetch("/api/prospect", {
         method: "POST",
@@ -95,6 +191,15 @@ export default function Page() {
     setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, [key]: value } : l)));
   }
 
+  // Approve = mark approved AND advance the pipeline stage. Client-side only.
+  function approveLead(index) {
+    setLeads((prev) =>
+      prev.map((l, i) =>
+        i === index ? { ...l, "Approved To Contact": "YES", "Status": "Ready to Contact" } : l
+      )
+    );
+  }
+
   function exportCSV() {
     const csv = toCSV(leads);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -106,6 +211,8 @@ export default function Page() {
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  const shown = leads.map((l, i) => ({ l, i })).filter(({ l }) => matchesFilter(l, filter));
 
   return (
     <div className="wrap">
@@ -162,18 +269,36 @@ export default function Page() {
         {error && <div className="error">⚠ {error}</div>}
       </div>
 
-      {meta && (
-        <div className="meta">
-          Found {meta.found} · removed {meta.removedFranchises} franchise{meta.removedFranchises === 1 ? "" : "s"} · analyzed {meta.analyzed}. Sorted by Fit Score. Click a row for the evidence drawer.
-        </div>
-      )}
-
       {leads.length > 0 && (
         <>
-          <div className="legend">
-            <span className="legend-item"><span className="legend-dot" style={{ background: "var(--verified)" }} /> Verified from Serper</span>
-            <span className="legend-item"><span className="legend-dot" style={{ background: "var(--social)" }} /> Possible social match</span>
-            <span className="legend-item"><span className="legend-dot" style={{ background: "var(--ai)" }} /> AI-generated — human review required</span>
+          <div className="workflow">
+            {WORKFLOW.map((step, i) => (
+              <span key={step} className="wf-step">
+                <span className="wf-dot">{i + 1}</span>{step}
+                {i < WORKFLOW.length - 1 && <span className="wf-arrow">→</span>}
+              </span>
+            ))}
+          </div>
+
+          {meta && (
+            <div className="meta">
+              Found {meta.found} · removed {meta.removedFranchises} franchise{meta.removedFranchises === 1 ? "" : "s"} · analyzed {meta.analyzed}. Sorted by score. Click a row to review, approve, and copy outreach.
+            </div>
+          )}
+
+          <div className="filters">
+            {FILTERS.map((f) => {
+              const count = f === "All" ? leads.length : leads.filter((l) => matchesFilter(l, f)).length;
+              return (
+                <button
+                  key={f}
+                  className={`chip${filter === f ? " active" : ""}`}
+                  onClick={() => setFilter(f)}
+                >
+                  {f} <span className="chip-count">{count}</span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="table-scroll">
@@ -183,25 +308,28 @@ export default function Page() {
                   <th>Business</th>
                   <th>Location</th>
                   <th>Phone</th>
-                  <th>Fit</th>
-                  <th>Temp</th>
-                  <th>Conf</th>
-                  <th>Channel</th>
+                  <th>Lead Score</th>
+                  <th>Best First Move</th>
                   <th>Status</th>
                   <th>Approved</th>
                 </tr>
               </thead>
               <tbody>
-                {leads.map((l, i) => (
-                  <FragmentRow
-                    key={i}
-                    lead={l}
-                    index={i}
-                    open={openRow === i}
-                    onToggle={() => setOpenRow(openRow === i ? null : i)}
-                    onUpdate={updateLead}
-                  />
-                ))}
+                {shown.length === 0 ? (
+                  <tr><td colSpan={7} className="empty-cell">No leads match “{filter}”.</td></tr>
+                ) : (
+                  shown.map(({ l, i }) => (
+                    <FragmentRow
+                      key={i}
+                      lead={l}
+                      index={i}
+                      open={openRow === i}
+                      onToggle={() => setOpenRow(openRow === i ? null : i)}
+                      onUpdate={updateLead}
+                      onApprove={approveLead}
+                    />
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -211,10 +339,11 @@ export default function Page() {
   );
 }
 
-function FragmentRow({ lead, index, open, onToggle, onUpdate }) {
+function FragmentRow({ lead, index, open, onToggle, onUpdate, onApprove }) {
+  const approved = lead["Approved To Contact"] === "YES";
   return (
     <>
-      <tr className={`lead-row${open ? " is-open" : ""}`} onClick={onToggle}>
+      <tr className={`lead-row${open ? " is-open" : ""}${approved ? " row-approved" : ""}`} onClick={onToggle}>
         <td>
           <div className="biz-cell">
             <span className="biz-name">{lead["Business Name"]}</span>
@@ -223,41 +352,35 @@ function FragmentRow({ lead, index, open, onToggle, onUpdate }) {
         </td>
         <td>{lead["Location"]}</td>
         <td>{lead["Phone"]}</td>
-        <td className="score">{lead["Fit Score"]}</td>
-        <td><span className={`pill ${tempClass(lead["Lead Temperature"])}`}>{lead["Lead Temperature"]}</span></td>
-        <td className="conf">{lead["Confidence Score"]}/5</td>
-        <td>{lead["Recommended Channel"]}</td>
+        <td>
+          <div className="scorecell">
+            <ScoreRing score={lead["Fit Score"]} temp={lead["Lead Temperature"]} />
+            <div className="scorecell-labels">
+              <span className={`temp-label ${tempClass(lead["Lead Temperature"])}`}>{lead["Lead Temperature"]}</span>
+              <span className="conf-label">{dataConfidence(lead["Confidence Score"])}</span>
+            </div>
+          </div>
+        </td>
+        <td><span className="move-label">{bestFirstMove(lead)}</span></td>
         <td onClick={(e) => e.stopPropagation()}>
           <select value={lead["Status"]} onChange={(e) => onUpdate(index, "Status", e.target.value)}>
             {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </td>
-        <td onClick={(e) => e.stopPropagation()}>
-          <input
-            type="checkbox"
-            checked={lead["Approved To Contact"] === "YES"}
-            onChange={(e) => onUpdate(index, "Approved To Contact", e.target.checked ? "YES" : "NO")}
-          />
+        <td>
+          {approved
+            ? <span className="approved-pill">✓ Approved</span>
+            : <span className="pending-pill">—</span>}
         </td>
       </tr>
       {open && (
         <tr className="detail">
-          <td colSpan={9}>
-            <EvidenceDrawer lead={lead} />
+          <td colSpan={7}>
+            <EvidenceDrawer lead={lead} index={index} onApprove={onApprove} />
           </td>
         </tr>
       )}
     </>
-  );
-}
-
-function CandidateRow({ c }) {
-  return (
-    <li className="cand-row">
-      <a className="ev-link" href={extUrl(c.url)} target="_blank" rel="noreferrer">{hostOf(c.url)}</a>
-      <Badge kind={confKind(c.confidence)}>{confLabel(c.confidence)}</Badge>
-      <div className="cand-meta">{c.matchReason}</div>
-    </li>
   );
 }
 
@@ -277,9 +400,8 @@ function SocialPlatform({ name, mainUrl, candidates }) {
       <div className="social-head">{name}</div>
       {main ? (
         <div className="cand-row main">
-          <span className="cand-lead">Main match</span>
           <a className="ev-link" href={extUrl(main.url)} target="_blank" rel="noreferrer">{hostOf(main.url)}</a>
-          <Badge kind="verified">High confidence</Badge>
+          <Badge kind="verified">{socialLabel("high")}</Badge>
           <div className="cand-meta">{main.matchReason}</div>
         </div>
       ) : (
@@ -287,42 +409,72 @@ function SocialPlatform({ name, mainUrl, candidates }) {
       )}
       {rest.length > 0 && (
         <ul className="cand-list">
-          {rest.map((c, i) => <CandidateRow key={i} c={c} />)}
+          {rest.map((c, i) => (
+            <li className="cand-row" key={i}>
+              <a className="ev-link" href={extUrl(c.url)} target="_blank" rel="noreferrer">{hostOf(c.url)}</a>
+              <Badge kind={socialKind(c.confidence)}>{socialLabel(c.confidence)}</Badge>
+              <div className="cand-meta">{c.matchReason}</div>
+            </li>
+          ))}
         </ul>
       )}
     </div>
   );
 }
 
-function EvidenceDrawer({ lead }) {
+function Draft({ title, text }) {
+  return (
+    <div className="draft">
+      <div className="draft-head">
+        <span className="msg-title">{title}</span>
+        <CopyButton label={`Copy ${title}`} text={text} />
+      </div>
+      <div className="msg">{text || "—"}</div>
+    </div>
+  );
+}
+
+function EvidenceDrawer({ lead, index, onApprove }) {
   const website = lead["Website"];
+  const approved = lead["Approved To Contact"] === "YES";
   const breakdown = Array.isArray(lead.scoreBreakdown) ? lead.scoreBreakdown : [];
 
   return (
     <div className="drawer">
-      {/* Scoring strip — clearly AI / directional */}
-      <div className="scorestrip">
-        <div className="col">
-          <span className="lbl">Fit Score</span>
-          <span className="big">{lead["Fit Score"]}</span>
+      {/* A. Lead Summary */}
+      <section className="sec summary">
+        <div className="summary-main">
+          <ScoreRing score={lead["Fit Score"]} temp={lead["Lead Temperature"]} size={64} />
+          <div className="summary-info">
+            <div className="summary-name">{lead["Business Name"]}</div>
+            <div className="summary-sub">
+              <span className={`pill ${tempClass(lead["Lead Temperature"])}`}>{lead["Lead Temperature"]}</span>
+              <span className="chip-muted">{dataConfidence(lead["Confidence Score"])}</span>
+              <span className={`trust-chip ${trustClass(lead["Trust Level"])}`}>{lead["Trust Level"]} trust</span>
+            </div>
+            <div className="summary-move">Best first move: <strong>{bestFirstMove(lead)}</strong></div>
+          </div>
+          <div className="spacer" />
+          <button
+            className={`btn-approve${approved ? " done" : ""}`}
+            onClick={() => onApprove(index)}
+            disabled={approved}
+          >
+            {approved ? "✓ Approved" : "Approve Lead"}
+          </button>
         </div>
-        <div className="col">
-          <span className="lbl">Temperature</span>
-          <span className={`pill ${tempClass(lead["Lead Temperature"])}`}>{lead["Lead Temperature"]}</span>
-        </div>
-        <div className="col">
-          <span className="lbl">Confidence</span>
-          <span className="big" style={{ fontSize: 18 }}>{lead["Confidence Score"]}/5</span>
-        </div>
-        <div className="spacer" />
-        <Badge kind="ai">AI-generated recommendation</Badge>
-      </div>
-      <div className="conf-exp">{lead["Confidence Explanation"]}</div>
+      </section>
 
-      {/* 1. Business Snapshot */}
+      {/* B. Why This Lead */}
+      <section className="sec">
+        <div className="sec-head"><h4>Why This Lead</h4></div>
+        <div className="field-line">{whyThisLead(lead)}</div>
+      </section>
+
+      {/* C. Trust & Evidence */}
       <section className="sec">
         <div className="sec-head">
-          <h4>Business Snapshot</h4>
+          <h4>Trust &amp; Evidence</h4>
           <Badge kind="verified">Verified from Serper</Badge>
         </div>
         <div className="snapshot">
@@ -340,33 +492,52 @@ function EvidenceDrawer({ lead }) {
               : "—"}
           </div>
         </div>
-      </section>
+        <div className="field-line"><span className="k">Verified data: </span>{lead["Evidence Summary"]}</div>
 
-      {/* 2. Evidence Found */}
-      <section className="sec">
-        <div className="sec-head">
-          <h4>Evidence Found</h4>
-          <Badge kind="verified">Verified from Serper</Badge>
+        <div className="social-review">
+          <div className="social-title">Social match status</div>
+          <SocialPlatform name="Instagram" mainUrl={lead["Instagram"]} candidates={lead.instagramCandidates || []} />
+          <SocialPlatform name="Facebook" mainUrl={lead["Facebook"]} candidates={lead.facebookCandidates || []} />
         </div>
-        <div className="field-line">{lead["Evidence Summary"]}</div>
-        <div className="ai-note">Social profiles are reviewed separately below — they are not counted as verified evidence.</div>
+        <div className="ai-note">Only a “Verified / High Confidence” match is treated as the business’s real profile. Possible / weak matches are guesses — confirm each one manually before any outreach. Nothing is sent automatically.</div>
       </section>
 
-      {/* Social Match Review */}
+      {/* D. Opportunity */}
       <section className="sec">
         <div className="sec-head">
-          <h4>Social Match Review</h4>
+          <h4>Opportunity</h4>
+          <Badge kind="ai">AI-generated recommendation</Badge>
+        </div>
+        <div className="field-line"><span className="k">Likely Lead Gap: </span>{lead["Likely Lead Gap"]}</div>
+        <div className="field-line"><span className="k">Likely Follow-Up Gap: </span>{lead["Likely Follow-Up Gap"]}</div>
+        <div className="field-line"><span className="k">Automation Opportunity: </span>{lead["Automation Opportunity"]}</div>
+      </section>
+
+      {/* E. Suggested Outreach */}
+      <section className="sec">
+        <div className="sec-head">
+          <h4>Suggested Outreach</h4>
           <Badge kind="review">Human review required</Badge>
         </div>
-        <SocialPlatform name="Instagram" mainUrl={lead["Instagram"]} candidates={lead.instagramCandidates || []} />
-        <SocialPlatform name="Facebook" mainUrl={lead["Facebook"]} candidates={lead.facebookCandidates || []} />
-        <div className="ai-note">Only a “High confidence” match is treated as the business’s real profile. Possible / weak matches are guesses — open and confirm each one before any outreach.</div>
+        <div className="field-line"><span className="k">Recommended first move: </span>{bestFirstMove(lead)}</div>
+
+        <div className="actions">
+          {website && <a className="btn-link" href={extUrl(website)} target="_blank" rel="noreferrer">Open Website</a>}
+          {lead["Instagram"] && <a className="btn-link" href={extUrl(lead["Instagram"])} target="_blank" rel="noreferrer">Open Instagram</a>}
+          {lead["Facebook"] && <a className="btn-link" href={extUrl(lead["Facebook"])} target="_blank" rel="noreferrer">Open Facebook</a>}
+        </div>
+
+        <Draft title="First Message" text={lead["First Message"]} />
+        <Draft title="Follow-Up 1" text={lead["Follow-Up 1"]} />
+        <Draft title="Follow-Up 2" text={lead["Follow-Up 2"]} />
+        <Draft title="Close-The-Loop" text={lead["Close-The-Loop Message"]} />
+        <div className="ai-note">These drafts are AI-generated suggestions. Review and edit before any manual outreach.</div>
       </section>
 
-      {/* Why this score */}
+      {/* F. Score Breakdown */}
       <section className="sec">
         <div className="sec-head">
-          <h4>Why This Score</h4>
+          <h4>Score Breakdown</h4>
           <Badge kind="ai">AI / directional</Badge>
         </div>
         <div className="score-why">{lead.scoreWhy}</div>
@@ -379,53 +550,6 @@ function EvidenceDrawer({ lead }) {
             </div>
           ))}
         </div>
-      </section>
-
-      {/* 3. Marketing Gap Hypothesis */}
-      <section className="sec">
-        <div className="sec-head">
-          <h4>Marketing Gap Hypothesis</h4>
-          <Badge kind="ai">AI-generated recommendation</Badge>
-        </div>
-        <div className="field-line"><span className="k">Visible CTA: </span>{lead["Visible CTA"]}</div>
-        <div className="field-line"><span className="k">Likely Lead Gap: </span>{lead["Likely Lead Gap"]}</div>
-        <div className="field-line"><span className="k">Likely Follow-Up Gap: </span>{lead["Likely Follow-Up Gap"]}</div>
-      </section>
-
-      {/* 4. Automation Opportunity */}
-      <section className="sec">
-        <div className="sec-head">
-          <h4>Automation Opportunity</h4>
-          <Badge kind="ai">AI-generated recommendation</Badge>
-        </div>
-        <div className="field-line">{lead["Automation Opportunity"]}</div>
-      </section>
-
-      {/* 5. Outreach Angle */}
-      <section className="sec">
-        <div className="sec-head">
-          <h4>Outreach Angle</h4>
-          <Badge kind="ai">AI-generated recommendation</Badge>
-        </div>
-        <div className="field-line"><span className="k">Recommended Channel: </span>{lead["Recommended Channel"]}</div>
-        {lead["Notes"] && <div className="field-line"><span className="k">Notes: </span>{lead["Notes"]}</div>}
-      </section>
-
-      {/* 6. Message Drafts */}
-      <section className="sec">
-        <div className="sec-head">
-          <h4>Message Drafts</h4>
-          <Badge kind="review">Human review required</Badge>
-        </div>
-        <div className="msg-title">First Message</div>
-        <div className="msg">{lead["First Message"] || "—"}</div>
-        <div className="msg-title">Follow-Up 1</div>
-        <div className="msg">{lead["Follow-Up 1"] || "—"}</div>
-        <div className="msg-title">Follow-Up 2</div>
-        <div className="msg">{lead["Follow-Up 2"] || "—"}</div>
-        <div className="msg-title">Close-The-Loop</div>
-        <div className="msg">{lead["Close-The-Loop Message"] || "—"}</div>
-        <div className="ai-note">These drafts are AI-generated suggestions. Review and edit before any manual outreach — nothing is sent automatically.</div>
       </section>
     </div>
   );
