@@ -288,23 +288,35 @@ tr.lead-row.is-open { background: var(--accent-weak); }
 .chev-cell { text-align: right; width: 30px; }
 .chev { color: var(--muted); font-size: 12px; }
 
-/* ---- Status pills ---- */
+/* ---- Status pills (grouped by stage) ---- */
 .status-pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
-.status-pill.new { color: var(--muted); background: rgba(102,112,133,0.14); }
-.status-pill.reviewing { color: var(--accent); background: var(--accent-weak); }
-.status-pill.ready { color: var(--verified); background: var(--verified-bg); }
-.status-pill.contacted { color: var(--accent); background: var(--accent-weak); }
+/* Review + neutral archive: gray */
+.status-pill.new, .status-pill.reviewing,
+.status-pill.notinterested, .status-pill.noresponse, .status-pill.duplicate, .status-pill.wrongmatch {
+  color: var(--muted); background: rgba(102,112,133,0.14);
+}
+/* Ready to Contact + early pipeline (+ legacy Approved): blue */
+.status-pill.approved, .status-pill.ready, .status-pill.contacted { color: var(--accent); background: var(--accent-weak); }
+/* Follow-Up: amber (urgency) */
 .status-pill.followup { color: var(--social); background: var(--social-bg); }
-.status-pill.booked { color: var(--verified); background: var(--verified-bg); }
-.status-pill.notfit { color: var(--review); background: var(--review-bg); }
+/* Proposal Sent: purple (deeper pipeline) */
+.status-pill.proposal { color: var(--ai); background: var(--ai-bg); }
+/* Booked + Client/Delivery: green (success) */
+.status-pill.booked, .status-pill.won, .status-pill.delivery, .status-pill.delivered { color: var(--verified); background: var(--verified-bg); }
+/* Hard archive: red muted */
+.status-pill.notfit, .status-pill.donotcontact { color: var(--review); background: var(--review-bg); }
 
-/* Row status accent + approve flash */
+/* Row status accent (left border) — mirrors the pill colors */
 tr.lead-row.status-ready td:first-child,
-tr.lead-row.row-approved td:first-child { box-shadow: inset 3px 0 0 var(--verified); }
 tr.lead-row.status-contacted td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 tr.lead-row.status-followup td:first-child { box-shadow: inset 3px 0 0 var(--social); }
-tr.lead-row.status-booked td:first-child { box-shadow: inset 3px 0 0 var(--verified); }
-tr.lead-row.status-notfit td:first-child { box-shadow: inset 3px 0 0 var(--review); }
+tr.lead-row.status-proposal td:first-child { box-shadow: inset 3px 0 0 var(--ai); }
+tr.lead-row.status-booked td:first-child,
+tr.lead-row.status-won td:first-child,
+tr.lead-row.status-delivery td:first-child,
+tr.lead-row.status-delivered td:first-child { box-shadow: inset 3px 0 0 var(--verified); }
+tr.lead-row.status-notfit td:first-child,
+tr.lead-row.status-donotcontact td:first-child { box-shadow: inset 3px 0 0 var(--review); }
 @keyframes rowFlash { 0% { background: var(--verified-bg); } 100% { background: transparent; } }
 tr.lead-row.flash { animation: rowFlash 1.3s ease; }
 
@@ -313,6 +325,9 @@ tr.lead-row.flash { animation: rowFlash 1.3s ease; }
 .summary-stats span { display: flex; flex-direction: column; font-size: 13px; font-weight: 600; }
 .summary-stats em { font-style: normal; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; margin-bottom: 2px; }
 .status-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+/* Selected/active status button — reflects the lead's current status. */
+button.status-btn.active { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 650; }
+button.status-btn.active:hover:not(:disabled) { border-color: var(--accent); filter: none; }
 .approve-help { margin-top: 12px; font-size: 13px; font-weight: 600; color: var(--verified); background: var(--verified-bg); border-radius: 8px; padding: 9px 12px; }
 
 /* ---- Trust & Evidence cards ---- */
@@ -529,8 +544,8 @@ tr.detail > td { box-shadow: inset 3px 0 0 var(--accent); }
 @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 /* Approved pipeline stage pill + row accent */
-.status-pill.approved { color: var(--verified); background: var(--verified-bg); }
-tr.lead-row.status-approved td:first-child { box-shadow: inset 3px 0 0 var(--verified); }
+/* Legacy "Approved" is treated as Ready to Contact (blue), same as the pill above. */
+tr.lead-row.status-approved td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
 /* ================================================================== *
  * v7 — unified qualification + consolidated drawer

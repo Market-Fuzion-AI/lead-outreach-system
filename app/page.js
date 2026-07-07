@@ -73,7 +73,10 @@ function bestMoveReason(lead) {
 
 const STATUS_SLUG = {
   "New": "new", "Reviewing": "reviewing", "Approved": "approved", "Ready to Contact": "ready",
-  "Contacted": "contacted", "Follow-Up Needed": "followup", "Booked Call": "booked", "Not a Fit": "notfit",
+  "Contacted": "contacted", "Follow-Up Needed": "followup", "Booked Call": "booked",
+  "Proposal Sent": "proposal", "Won": "won", "In Delivery": "delivery", "Delivered": "delivered",
+  "Not a Fit": "notfit", "Not Interested": "notinterested", "No Response": "noresponse",
+  "Duplicate": "duplicate", "Wrong Match": "wrongmatch", "Do Not Contact": "donotcontact",
 };
 const statusSlug = (s) => STATUS_SLUG[s] || "new";
 
@@ -785,10 +788,18 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
         <Draft title="Close-The-Loop" text={lead["Close-The-Loop Message"]} />
         <div className="ai-note">AI-generated suggestions. Review and edit before any manual outreach — nothing is sent automatically.</div>
         <div className="status-actions">
-          <button className="secondary sm" onClick={() => onStatus(index, "Contacted")}>Mark Contacted</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Follow-Up Needed")}>Follow-Up Needed</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Booked Call")}>Booked Call</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Not a Fit")}>Not a Fit</button>
+          <button className={`secondary sm status-btn${lead["Status"] === "Contacted" ? " active" : ""}`} onClick={() => onStatus(index, "Contacted")}>
+            {lead["Status"] === "Contacted" ? "✓ Contacted" : "Mark Contacted"}
+          </button>
+          <button className={`secondary sm status-btn${lead["Status"] === "Follow-Up Needed" ? " active" : ""}`} onClick={() => onStatus(index, "Follow-Up Needed")}>
+            {lead["Status"] === "Follow-Up Needed" ? "✓ Follow-Up Needed" : "Follow-Up Needed"}
+          </button>
+          <button className={`secondary sm status-btn${lead["Status"] === "Booked Call" ? " active" : ""}`} onClick={() => onStatus(index, "Booked Call")}>
+            {lead["Status"] === "Booked Call" ? "✓ Booked Call" : "Booked Call"}
+          </button>
+          <button className={`secondary sm status-btn${lead["Status"] === "Not a Fit" ? " active" : ""}`} onClick={() => onStatus(index, "Not a Fit")}>
+            {lead["Status"] === "Not a Fit" ? "✓ Not a Fit" : "Not a Fit"}
+          </button>
         </div>
         <div className="notes-label">Private notes</div>
         <textarea
