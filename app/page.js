@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
+import {
+  onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
+} from "firebase/auth";
 import { toCSV } from "../lib/schema";
 import { mergeSaved } from "../lib/workflow";
 import {
-  isFirebaseConfigured, auth, googleProvider, fetchSavedLeads, saveLead,
+  isFirebaseConfigured, auth, fetchSavedLeads, saveLead, createUserProfile, touchUserLogin,
 } from "../lib/firebase";
 
 const PRESETS = [
@@ -174,7 +176,52 @@ function ThemeButton({ theme, onToggle }) {
   );
 }
 
-function SignInScreen({ onSignIn, theme, onToggleTheme }) {
+// Map Firebase auth error codes to clear, human inline messages.
+function authErrorMessage(code) {
+  switch (code) {
+    case "auth/invalid-email": return "Enter a valid email address.";
+    case "auth/missing-password": return "Enter your password.";
+    case "auth/wrong-password": return "Incorrect password.";
+    case "auth/user-not-found": return "No account found with that email.";
+    case "auth/invalid-credential": return "Incorrect email or password.";
+    case "auth/email-already-in-use": return "An account with that email already exists.";
+    case "auth/weak-password": return "Password should be at least 6 characters.";
+    case "auth/too-many-requests": return "Too many attempts. Please wait a moment and try again.";
+    case "auth/network-request-failed": return "Network error. Check your connection and try again.";
+    default: return "Something went wrong. Please try again.";
+  }
+}
+
+// Email/password auth card. Google is intentionally omitted (popup was unreliable
+// on Safari/Vercel). onAuthStateChanged in Page lifts the gate after success.
+function AuthScreen({ theme, onToggleTheme }) {
+  const [mode, setMode] = useState("signin"); // "signin" | "create"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  function switchMode(m) { setMode(m); setErr(""); }
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr("");
+    setBusy(true);
+    try {
+      if (mode === "signin") {
+        const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+        await touchUserLogin(cred.user.uid, cred.user.email);
+      } else {
+        const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+        await createUserProfile(cred.user.uid, cred.user.email);
+      }
+      // Gate lifts via Page's onAuthStateChanged listener.
+    } catch (e2) {
+      setErr(authErrorMessage(e2?.code));
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="wrap">
       <div className="topbar">
@@ -184,11 +231,32 @@ function SignInScreen({ onSignIn, theme, onToggleTheme }) {
         </div>
         <ThemeButton theme={theme} onToggle={onToggleTheme} />
       </div>
-      <div className="signin-card">
-        <div className="signin-icon">◎</div>
-        <h2>Sign in to save leads and pipeline progress.</h2>
-        <p>Your favorites, approvals, notes, and pipeline status are saved to your account and follow you across devices and refreshes.</p>
-        <button className="google-btn" onClick={onSignIn}>Continue with Google</button>
+      <div className="auth-card">
+        <h2>Sign in to your Prospecting Command Center</h2>
+        <p className="auth-sub">Save leads, statuses, favorites, and notes across sessions.</p>
+
+        <div className="auth-tabs">
+          <button className={mode === "signin" ? "active" : ""} onClick={() => switchMode("signin")} type="button">Sign In</button>
+          <button className={mode === "create" ? "active" : ""} onClick={() => switchMode("create")} type="button">Create Account</button>
+        </div>
+
+        <form onSubmit={submit} className="auth-form">
+          <input
+            type="email" placeholder="Email" value={email} autoComplete="email" required
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <input
+            type="password" placeholder="Password" value={password} required
+            autoComplete={mode === "signin" ? "current-password" : "new-password"}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          {err && <div className="auth-error">⚠ {err}</div>}
+          <button type="submit" className="auth-submit" disabled={busy}>
+            {busy ? <><span className="spinner" />Please wait…</> : (mode === "signin" ? "Sign In" : "Create Account")}
+          </button>
+        </form>
+
+        {mode === "create" && <p className="auth-hint">Use this for your private Market Fuzion workspace.</p>}
       </div>
     </div>
   );
@@ -255,10 +323,6 @@ export default function Page() {
     setTheme(next);
     document.documentElement.setAttribute("data-theme", next);
     try { localStorage.setItem("mf-theme", next); } catch {}
-  }
-  async function signIn() {
-    try { await signInWithPopup(auth, googleProvider); }
-    catch (e) { if (e?.code !== "auth/popup-closed-by-user" && e?.code !== "auth/cancelled-popup-request") showToast("Sign-in failed.", "error"); }
   }
   async function signOutUser() { try { await signOut(auth); } catch { /* ignore */ } }
 
@@ -342,12 +406,12 @@ export default function Page() {
     URL.revokeObjectURL(url);
   }
 
-  // Gate behind Google sign-in when Firebase is configured.
+  // Gate behind email/password sign-in when Firebase is configured.
   if (isFirebaseConfigured && !authReady) {
     return <div className="wrap"><div className="loading-screen"><span className="spinner" />Loading…</div></div>;
   }
   if (isFirebaseConfigured && !user) {
-    return <SignInScreen onSignIn={signIn} theme={theme} onToggleTheme={toggleTheme} />;
+    return <AuthScreen theme={theme} onToggleTheme={toggleTheme} />;
   }
 
   const shown = leads.map((l, i) => ({ l, i })).filter(({ l }) => matchesFilter(l, filter));

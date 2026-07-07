@@ -60,21 +60,37 @@ Set up:
    ```
    These are safe to expose to the browser. **Serper/OpenAI keys stay server-side — never prefix them with `NEXT_PUBLIC_`.**
 
-Data model: `users/{userId}/leads/{leadKey}` — one doc per saved lead, keyed by a stable
-lead key (normalized name + phone + website domain + city). Writes are merges, so a new
-search refreshes public info without clobbering your favorite / approval / status / notes.
+Sign-in is **email/password** (Firebase client auth — `createUserWithEmailAndPassword` /
+`signInWithEmailAndPassword`). On account creation a profile doc is written to
+`users/{uid}` (`uid`, `email`, `displayName`, `plan: "solo"`, `role: "owner"`, timestamps);
+normal sign-in updates `lastLoginAt` / `updatedAt`. Profile writes are best-effort and never
+block sign-in.
 
-**Firestore security rules** (Console → Firestore → Rules) — each user can only touch their own leads:
+Data model:
+- `users/{uid}` — the user profile doc.
+- `users/{uid}/leads/{leadKey}` — one doc per saved lead, keyed by a stable lead key
+  (normalized name + phone + website domain + city). Writes are merges, so a new search
+  refreshes public info without clobbering your favorite / approval / status / notes.
+
+**Firestore security rules** (Console → Firestore → Rules) — each user can only touch their
+own profile and leads:
 ```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId}/leads/{leadId} {
+    match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+      match /leads/{leadId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
   }
 }
 ```
+
+**Authorized domains (required for production auth on Vercel):** add your deployed Vercel
+domain(s) under **Firebase Console → Authentication → Settings → Authorized domains**,
+otherwise sign-in will fail on the live site.
 
 ## Deploy to Vercel
 
