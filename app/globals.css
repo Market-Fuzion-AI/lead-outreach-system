@@ -386,6 +386,15 @@ button.sm { padding: 7px 12px; font-size: 12.5px; }
  * ================================================================== */
 
 .filters-help { font-size: 12px; color: var(--muted); margin: -6px 2px 16px; }
+.filters { align-items: center; }
+.filters-spacer { flex: 1 1 auto; min-width: 8px; }
+.quality-select {
+  width: auto; min-width: 130px; padding: 7px 12px; font-size: 12.5px; font-weight: 550;
+  border-radius: 999px; background: var(--panel); border: 1px solid var(--border);
+  color: var(--text); box-shadow: var(--shadow); cursor: pointer;
+}
+.quality-select:hover { border-color: var(--border-strong); }
+@media (max-width: 640px) { .filters-spacer { display: none; } .quality-select { width: 100%; } }
 
 /* Favorite star */
 .star { background: none; border: none; padding: 0 2px; cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); }
@@ -426,6 +435,7 @@ tr.detail > td { box-shadow: inset 3px 0 0 var(--accent); }
 .matters { display: flex; flex-direction: column; gap: 9px; }
 .matters p { margin: 0; font-size: 13.5px; line-height: 1.55; }
 .matters b { color: var(--muted); font-weight: 600; }
+.matters-text { font-size: 13.5px; line-height: 1.6; white-space: pre-line; color: var(--text); }
 .matters-quote { font-style: italic; color: var(--muted); border-left: 2px solid var(--border); padding-left: 12px; }
 
 /* C. Verified Info — compact facts */

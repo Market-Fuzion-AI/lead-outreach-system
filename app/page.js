@@ -17,11 +17,13 @@ const PRESETS = [
   "Wellness", "Photography", "Custom",
 ];
 
-const FILTERS = [
-  "All", "Hot Leads", "Warm Leads", "High Trust", "Needs Social Review",
-  "Favorites", "Saved", "Approved", "Ready to Contact", "Contacted",
+// Primary workflow chips (the everyday pipeline view).
+const PRIMARY_FILTERS = [
+  "All", "Favorites", "Ready to Contact", "Contacted",
   "Follow-Up Needed", "Booked Call", "Not a Fit",
 ];
+// Lead-quality filters live in a compact secondary dropdown.
+const QUALITY_FILTERS = ["Hot Leads", "Warm Leads", "High Trust", "Needs Social Review"];
 
 const WORKFLOW = ["Search", "Review", "Approve", "Contact", "Export"];
 const STORAGE_KEY = "mf-workflow-v1";
@@ -75,23 +77,28 @@ const STATUS_SLUG = {
 };
 const statusSlug = (s) => STATUS_SLUG[s] || "new";
 
-function matchesFilter(lead, f) {
+function matchesPrimary(lead, f) {
   switch (f) {
-    case "Hot Leads": return scoreBand(lead["Fit Score"]) === "hot";
-    case "Warm Leads": return scoreBand(lead["Fit Score"]) === "warm";
-    case "High Trust": return lead["Trust Level"] === "High";
-    case "Needs Social Review": return lead.socialEvidence === "possible";
     case "Favorites": return !!lead.favorite;
-    case "Saved": return !!lead._saved;
-    case "Approved": return lead["Approved To Contact"] === "YES";
     case "Ready to Contact":
     case "Contacted":
     case "Follow-Up Needed":
     case "Booked Call":
     case "Not a Fit": return lead["Status"] === f;
-    default: return true;
+    default: return true; // "All"
   }
 }
+function matchesQuality(lead, q) {
+  switch (q) {
+    case "Hot Leads": return scoreBand(lead["Fit Score"]) === "hot";
+    case "Warm Leads": return scoreBand(lead["Fit Score"]) === "warm";
+    case "High Trust": return lead["Trust Level"] === "High";
+    case "Needs Social Review": return lead.socialEvidence === "possible";
+    default: return true; // "" = any quality
+  }
+}
+const matchesFilter = (lead, primary, quality) =>
+  matchesPrimary(lead, primary) && matchesQuality(lead, quality);
 
 function groupSocial(mainUrl, candidates) {
   const main = candidates.find((c) => c.url === mainUrl) || null;
@@ -277,6 +284,7 @@ export default function Page() {
   const [error, setError] = useState("");
   const [openRow, setOpenRow] = useState(null);
   const [filter, setFilter] = useState("All");
+  const [quality, setQuality] = useState("");
   const [flashId, setFlashId] = useState(null);
   const [theme, setTheme] = useState("light");
   const [user, setUser] = useState(null);
@@ -330,7 +338,7 @@ export default function Page() {
   const effectiveCategory = form.categoryPreset === "Custom" ? form.customCategory : form.categoryPreset;
 
   async function runSearch() {
-    setLoading(true); setError(""); setLeads([]); setMeta(null); setOpenRow(null); setFilter("All");
+    setLoading(true); setError(""); setLeads([]); setMeta(null); setOpenRow(null); setFilter("All"); setQuality("");
     try {
       const res = await fetch("/api/prospect", {
         method: "POST",
@@ -414,7 +422,7 @@ export default function Page() {
     return <AuthScreen theme={theme} onToggleTheme={toggleTheme} />;
   }
 
-  const shown = leads.map((l, i) => ({ l, i })).filter(({ l }) => matchesFilter(l, filter));
+  const shown = leads.map((l, i) => ({ l, i })).filter(({ l }) => matchesFilter(l, filter, quality));
 
   return (
     <div className="wrap">
@@ -497,14 +505,19 @@ export default function Page() {
           )}
 
           <div className="filters">
-            {FILTERS.map((f) => {
-              const count = f === "All" ? leads.length : leads.filter((l) => matchesFilter(l, f)).length;
+            {PRIMARY_FILTERS.map((f) => {
+              const count = leads.filter((l) => matchesFilter(l, f, quality)).length;
               return (
                 <button key={f} className={`chip${filter === f ? " active" : ""}`} onClick={() => setFilter(f)}>
                   {f} <span className="chip-count">{count}</span>
                 </button>
               );
             })}
+            <div className="filters-spacer" />
+            <select className="quality-select" value={quality} onChange={(e) => setQuality(e.target.value)} aria-label="Lead quality filter">
+              <option value="">All quality</option>
+              {QUALITY_FILTERS.map((q) => <option key={q} value={q}>{q}</option>)}
+            </select>
           </div>
           <div className="filters-help">
             {user ? "Saved to your account — favorites, status, and notes follow you across devices." : "Statuses and favorites are saved in this browser only."}
@@ -626,7 +639,7 @@ function ScoreDetails({ lead }) {
   return (
     <section className="sec">
       <div className="sec-head"><h4>Score Details</h4><Badge kind="ai">AI / directional</Badge></div>
-      <div className="score-exp">Score is based on public data, social match confidence, and AI-estimated automation opportunity.</div>
+      <div className="score-exp">Each dimension is rated 0–10 from public data and AI interpretation; the overall score (0–100) is a weighted blend. Directional — verify before outreach.</div>
       <button className="collapse-toggle" onClick={() => setOpen((o) => !o)}>
         {open ? "Hide score breakdown" : "View score breakdown"}
       </button>
@@ -710,16 +723,23 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
 
       {/* B. What matters */}
       <section className="sec">
-        <div className="sec-head"><h4>What matters</h4></div>
-        <div className="matters">
-          <p><b>Worth a look:</b> {opp?.problem || "May benefit from faster inquiry capture and follow-up, based on public data."}</p>
-          <p><b>Likely gap:</b> {lead["Likely Lead Gap"] && lead["Likely Lead Gap"] !== "Unknown" ? lead["Likely Lead Gap"] : "Not clear from public data."}</p>
-          <p><b>What we could offer first:</b> {opp?.offer || lead["Automation Opportunity"]}</p>
-          {opp?.firstOffer && <p className="matters-quote">“{opp.firstOffer}”</p>}
+        <div className="sec-head"><h4>What matters</h4><Badge kind="ai">Directional</Badge></div>
+        <div className="matters-text">
+          {lead.whatMatters || opp?.offer || "Based on public data, this business may benefit from faster inquiry capture and follow-up."}
         </div>
       </section>
 
-      {/* C. Verified info */}
+      {/* C. Next action */}
+      <section className="sec">
+        <div className="sec-head"><h4>Next action</h4><Badge kind="review">Human review</Badge></div>
+        <div className="move-box">
+          <div className="move-big">{bestFirstMove(lead)}</div>
+          <div className="move-why">{bestMoveReason(lead)}</div>
+        </div>
+        {opp?.firstOffer && <div className="field-line"><span className="k">Suggested opener: </span>{opp.firstOffer}</div>}
+      </section>
+
+      {/* D. Verified info */}
       <section className="sec">
         <div className="sec-head"><h4>Verified info</h4><Badge kind="verified">Public data</Badge></div>
         <div className="facts">
@@ -731,7 +751,7 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
         </div>
       </section>
 
-      {/* D. Social profiles */}
+      {/* E. Social profiles */}
       <section className="sec">
         <div className="sec-head">
           <h4>Social profiles</h4>
@@ -743,11 +763,9 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
         {supporting.length > 0 && <SupportingEvidence items={supporting} />}
       </section>
 
-      {/* E. Suggested outreach */}
+      {/* F. Outreach messages */}
       <section className="sec">
-        <div className="sec-head"><h4>Suggested outreach</h4><Badge kind="review">Human review</Badge></div>
-        <div className="field-line"><span className="k">Recommended channel: </span>{bestFirstMove(lead)}</div>
-        <div className="move-why">{bestMoveReason(lead)}</div>
+        <div className="sec-head"><h4>Outreach messages</h4><Badge kind="review">Human review</Badge></div>
         <Draft title="First Message" text={lead["First Message"]} />
         <Draft title="Follow-Up 1" text={lead["Follow-Up 1"]} />
         <Draft title="Follow-Up 2" text={lead["Follow-Up 2"]} />
@@ -755,7 +773,7 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
         <div className="ai-note">AI-generated suggestions. Review and edit before any manual outreach — nothing is sent automatically.</div>
       </section>
 
-      {/* F. Private notes */}
+      {/* G. Private notes */}
       <section className="sec">
         <div className="sec-head"><h4>Private notes</h4></div>
         <textarea

@@ -6,14 +6,16 @@ import { buildFranchiseMatchers, isFranchise } from "../../../lib/franchises";
 export const runtime = "nodejs";
 export const maxDuration = 60; // give the batch time on Vercel
 
-const SCORE_CAPS = {
-  inbound_lead_dependence: 20,
-  follow_up_urgency: 20,
-  social_channel_fit: 15,
-  automation_opportunity_score: 20,
-  ability_to_pay: 15,
-  personalization_quality: 10,
-};
+// Six dimensions, each rated 0-10 by the model. Weights sum to 100 so the
+// overall Fit Score stays 0-100, while every breakdown category displays as 0-10.
+const SCORE_DIMENSIONS = [
+  { key: "lead_capture_need", label: "Lead Capture Need", weight: 20 },
+  { key: "follow_up_risk", label: "Follow-Up Risk", weight: 20 },
+  { key: "channel_reachability", label: "Channel Reachability", weight: 15 },
+  { key: "automation_fit", label: "Automation Fit", weight: 20 },
+  { key: "business_strength", label: "Business Strength", weight: 15 },
+  { key: "outreach_personalization", label: "Outreach Personalization", weight: 10 },
+];
 
 function clampInt(v, max) {
   const n = Math.round(Number(v));
@@ -108,39 +110,40 @@ function confidenceExplanation(evidence) {
 
 // Deterministic score breakdown (per-category points) — computed from clamped
 // sub-scores, not trusted to the model's own arithmetic.
+// Every category displays as 0-10; the model's raw values are clamped here.
 function scoreBreakdown(ai) {
-  return [
-    { label: "Inbound Lead Dependence", score: clampInt(ai.inbound_lead_dependence, SCORE_CAPS.inbound_lead_dependence), max: SCORE_CAPS.inbound_lead_dependence },
-    { label: "Follow-Up Urgency", score: clampInt(ai.follow_up_urgency, SCORE_CAPS.follow_up_urgency), max: SCORE_CAPS.follow_up_urgency },
-    { label: "Social Channel Fit", score: clampInt(ai.social_channel_fit, SCORE_CAPS.social_channel_fit), max: SCORE_CAPS.social_channel_fit },
-    { label: "Automation Opportunity", score: clampInt(ai.automation_opportunity_score, SCORE_CAPS.automation_opportunity_score), max: SCORE_CAPS.automation_opportunity_score },
-    { label: "Ability to Pay", score: clampInt(ai.ability_to_pay, SCORE_CAPS.ability_to_pay), max: SCORE_CAPS.ability_to_pay },
-    { label: "Personalization Quality", score: clampInt(ai.personalization_quality, SCORE_CAPS.personalization_quality), max: SCORE_CAPS.personalization_quality },
-  ];
+  return SCORE_DIMENSIONS.map((d) => ({
+    label: d.label,
+    score: clampInt(ai[d.key], 10),
+    max: 10,
+    weight: d.weight,
+  }));
 }
 
-// Plain-English "why this score" grounded in the actual sub-scores.
+// Weighted 0-100 total from the 0-10 dimensions (weights sum to 100).
+function totalFromBreakdown(breakdown) {
+  const sum = breakdown.reduce((acc, b) => acc + (b.score / 10) * b.weight, 0);
+  return Math.round(sum);
+}
+
+// Plain-English "why this score" grounded in the actual 0-10 dimensions.
 function scoreWhy(breakdown) {
-  const byPct = [...breakdown].sort((a, b) => b.score / b.max - a.score / a.max);
-  const top = byPct.slice(0, 2).map((x) => `${x.label} (${x.score}/${x.max})`);
-  const low = byPct[byPct.length - 1];
-  return `Strongest signals: ${top.join(" and ")}. Weakest: ${low.label} (${low.score}/${low.max}). AI estimate from public data — verify before outreach.`;
+  const byScore = [...breakdown].sort((a, b) => b.score - a.score);
+  const top = byScore.slice(0, 2).map((x) => `${x.label} (${x.score}/10)`);
+  const low = byScore[byScore.length - 1];
+  return `Strongest: ${top.join(" and ")}. Weakest: ${low.label} (${low.score}/10). Directional estimate from public data — verify before outreach.`;
 }
 
-// Structured "Recommended Opportunity" from the model's hedged fields. The CSV
-// column keeps a single composed string; the UI gets the structured pieces.
+// "Recommended Opportunity" — the CSV column keeps one composed string; the UI
+// gets the structured offer/first-offer pieces.
 function composeOpportunity(ai) {
-  const problem = (ai.opportunity_problem || "").trim();
   const offer = (ai.opportunity_offer || "").trim();
-  const why = (ai.opportunity_why || "").trim();
   const firstOffer = (ai.opportunity_first_offer || "").trim();
   const text = [
-    problem && `Problem: ${problem}`,
     offer && `Possible offer: ${offer}`,
-    why && `Why it matters: ${why}`,
     firstOffer && `Suggested first offer: ${firstOffer}`,
   ].filter(Boolean).join(" | ");
-  return { problem, offer, why, firstOffer, text: text || "Unknown" };
+  return { offer, firstOffer, text: text || "Unknown" };
 }
 
 // Build a lead object keyed by the schema COLUMNS, plus camelCase UI-only extras
@@ -212,13 +215,14 @@ function assembleLead(b, ai, niche, social = {}) {
       scoreBreakdown: [],
       scoreWhy: "Not scored — AI analysis failed. Re-run to generate a score.",
       opportunity: null,
+      whatMatters: "",
     };
   }
 
   const opp = composeOpportunity(ai);
 
   const breakdown = scoreBreakdown(ai);
-  const total = breakdown.reduce((sum, x) => sum + x.score, 0);
+  const total = totalFromBreakdown(breakdown);
 
   // Model confidence, capped by how trustworthy the social evidence is.
   // Possible/weak matches carry real risk of being the wrong profile, so they
@@ -248,6 +252,7 @@ function assembleLead(b, ai, niche, social = {}) {
     scoreBreakdown: breakdown,
     scoreWhy: scoreWhy(breakdown),
     opportunity: opp,
+    whatMatters: (ai.what_matters || "").trim(),
   };
 }
 
