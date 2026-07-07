@@ -2,26 +2,10 @@ import { NextResponse } from "next/server";
 import { searchBusinesses, findSocialCandidates } from "../../../lib/serper";
 import { analyzeLead } from "../../../lib/openai";
 import { buildFranchiseMatchers, isFranchise } from "../../../lib/franchises";
+import { buildScore, FALLBACK_MESSAGES, fallbackBusinessRead } from "../../../lib/scoring";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // give the batch time on Vercel
-
-// Six dimensions, each rated 0-10 by the model. Weights sum to 100 so the
-// overall Fit Score stays 0-100, while every breakdown category displays as 0-10.
-const SCORE_DIMENSIONS = [
-  { key: "lead_capture_need", label: "Lead Capture Need", weight: 20 },
-  { key: "follow_up_risk", label: "Follow-Up Risk", weight: 20 },
-  { key: "channel_reachability", label: "Channel Reachability", weight: 15 },
-  { key: "automation_fit", label: "Automation Fit", weight: 20 },
-  { key: "business_strength", label: "Business Strength", weight: 15 },
-  { key: "outreach_personalization", label: "Outreach Personalization", weight: 10 },
-];
-
-function clampInt(v, max) {
-  const n = Math.round(Number(v));
-  if (Number.isNaN(n)) return 0;
-  return Math.max(0, Math.min(max, n));
-}
 
 function temperature(total) {
   if (total >= 80) return "Hot Lead";
@@ -108,37 +92,11 @@ function confidenceExplanation(evidence) {
   return "No confident social match was found — social evidence is incomplete. Confidence is based on public business data and website presence only.";
 }
 
-// Deterministic score breakdown (per-category points) — computed from clamped
-// sub-scores, not trusted to the model's own arithmetic.
-// Every category displays as 0-10; the model's raw values are clamped here.
-function scoreBreakdown(ai) {
-  return SCORE_DIMENSIONS.map((d) => ({
-    label: d.label,
-    score: clampInt(ai[d.key], 10),
-    max: 10,
-    weight: d.weight,
-  }));
-}
-
-// Weighted 0-100 total from the 0-10 dimensions (weights sum to 100).
-function totalFromBreakdown(breakdown) {
-  const sum = breakdown.reduce((acc, b) => acc + (b.score / 10) * b.weight, 0);
-  return Math.round(sum);
-}
-
-// Plain-English "why this score" grounded in the actual 0-10 dimensions.
-function scoreWhy(breakdown) {
-  const byScore = [...breakdown].sort((a, b) => b.score - a.score);
-  const top = byScore.slice(0, 2).map((x) => `${x.label} (${x.score}/10)`);
-  const low = byScore[byScore.length - 1];
-  return `Strongest: ${top.join(" and ")}. Weakest: ${low.label} (${low.score}/10). Directional estimate from public data — verify before outreach.`;
-}
-
 // "Recommended Opportunity" — the CSV column keeps one composed string; the UI
-// gets the structured offer/first-offer pieces.
+// gets the structured offer/first-offer pieces. Robust to a missing AI object.
 function composeOpportunity(ai) {
-  const offer = (ai.opportunity_offer || "").trim();
-  const firstOffer = (ai.opportunity_first_offer || "").trim();
+  const offer = (ai?.opportunity_offer || "").trim() || "A simple inquiry-capture and instant follow-up system.";
+  const firstOffer = (ai?.opportunity_first_offer || "").trim();
   const text = [
     offer && `Possible offer: ${offer}`,
     firstOffer && `Suggested first offer: ${firstOffer}`,
@@ -146,8 +104,10 @@ function composeOpportunity(ai) {
   return { offer, firstOffer, text: text || "Unknown" };
 }
 
-// Build a lead object keyed by the schema COLUMNS, plus camelCase UI-only extras
-// (rating/reviews/category/scoreBreakdown/opportunity/social) that never hit CSV.
+// Build a lead object keyed by the schema COLUMNS, plus camelCase UI-only extras.
+// Scoring is unified + robust: AI values where valid, deterministic fallback
+// otherwise, so a lead with verified data never scores 0. Missing outreach
+// messages and Business Read also get deterministic fallbacks.
 function assembleLead(b, ai, niche, social = {}) {
   const noteBits = [];
   if (hasVal(b.rating)) noteBits.push(`${b.rating}★`);
@@ -157,17 +117,34 @@ function assembleLead(b, ai, niche, social = {}) {
   const trust = trustFrom(b);
   const igCands = social.instagramCandidates || [];
   const fbCands = social.facebookCandidates || [];
-  // Report the main-match confidence: "high" when a profile/page was promoted.
   const igConf = social.instagram ? "high" : (igCands[0]?.confidence || "none");
   const fbConf = social.facebook ? "high" : (fbCands[0]?.confidence || "none");
   const evidence = socialEvidenceLevel(social);
 
-  // Verified fields + trust/social columns shared by both success and failure.
-  const base = {
+  // Unified 10-dimension score (max 100); fills any missing/invalid dimension
+  // from verified public data.
+  const score = buildScore(ai, b, social);
+  const total = score.total;
+  const dims = score.dims;
+  const sorted = [...dims].sort((a, c) => c.score - a.score);
+  const scoreStrong = sorted.slice(0, 3).map((d) => `${d.label} (${d.score}/10)`);
+  const scoreWeak = sorted.slice(-2).map((d) => `${d.label} (${d.score}/10)`);
+
+  // Confidence: never below data richness; capped by weak social evidence.
+  const aiConf = ai ? Math.max(0, Math.min(5, Math.round(Number(ai.confidence_score) || 0))) : 0;
+  let conf = Math.max(aiConf, score.dataConfidence);
+  if (evidence === "possible") conf = Math.min(conf, 3);
+  else if (evidence === "none") conf = Math.min(conf, 4);
+  conf = Math.max(1, Math.min(5, conf));
+
+  const opp = composeOpportunity(ai);
+  const businessRead = (ai?.what_matters || "").trim() || fallbackBusinessRead(b, score.signals);
+  const msg = (v, fb) => (String(v || "").trim() || fb);
+
+  return {
     "Business Name": b.business_name,
     "Niche": niche,
     "Website": b.website,
-    // Main IG/FB link only when the top candidate is high-confidence.
     "Instagram": social.instagram || "",
     "Facebook": social.facebook || "",
     "Email": "",
@@ -184,75 +161,35 @@ function assembleLead(b, ai, niche, social = {}) {
     "Instagram Candidate Links": candidateLinks(igCands),
     "Facebook Candidate Links": candidateLinks(fbCands),
     "Social Match Notes": socialMatchNotes(social),
-    // camelCase UI-only extras (not in COLUMNS, so excluded from CSV):
+    "Visible CTA": ai?.visible_cta || "Unknown",
+    "Likely Lead Gap": ai?.likely_lead_gap || "Unknown",
+    "Likely Follow-Up Gap": ai?.likely_follow_up_gap || "Unknown",
+    "Automation Opportunity": opp.text,
+    "Fit Score": total,
+    "Lead Temperature": temperature(total),
+    "Confidence Score": conf,
+    "Confidence Explanation": confidenceExplanation(evidence),
+    "Recommended Channel": ai?.recommended_channel || "Phone/Text",
+    "First Message": msg(ai?.first_message, FALLBACK_MESSAGES.first),
+    "Follow-Up 1": msg(ai?.follow_up_1, FALLBACK_MESSAGES.followUp1),
+    "Follow-Up 2": msg(ai?.follow_up_2, FALLBACK_MESSAGES.followUp2),
+    "Close-The-Loop Message": msg(ai?.close_the_loop, FALLBACK_MESSAGES.closeTheLoop),
+    "Status": "New",
+    "Approved To Contact": "NO",
+    "Notes": `${ai?.notes || ""}${publicContext}`.trim(),
+    // camelCase UI-only extras (excluded from CSV):
     rating: b.rating ?? "",
     reviews: b.reviews ?? "",
     category: b.category || "",
     instagramCandidates: igCands,
     facebookCandidates: fbCands,
     socialEvidence: evidence,
-  };
-
-  if (!ai) {
-    return {
-      ...base,
-      "Visible CTA": "Unknown",
-      "Likely Lead Gap": "Unknown",
-      "Likely Follow-Up Gap": "Unknown",
-      "Automation Opportunity": "Unknown",
-      "Fit Score": 0,
-      "Lead Temperature": "Skip",
-      "Confidence Score": 1,
-      "Confidence Explanation": "AI analysis failed for this lead — re-run to score it.",
-      "Recommended Channel": "Phone/Text",
-      "First Message": "",
-      "Follow-Up 1": "",
-      "Follow-Up 2": "",
-      "Close-The-Loop Message": "",
-      "Status": "New",
-      "Approved To Contact": "NO",
-      "Notes": `AI analysis failed — retry this lead.${publicContext}`,
-      scoreBreakdown: [],
-      scoreWhy: "Not scored — AI analysis failed. Re-run to generate a score.",
-      opportunity: null,
-      whatMatters: "",
-    };
-  }
-
-  const opp = composeOpportunity(ai);
-
-  const breakdown = scoreBreakdown(ai);
-  const total = totalFromBreakdown(breakdown);
-
-  // Model confidence, capped by how trustworthy the social evidence is.
-  // Possible/weak matches carry real risk of being the wrong profile, so they
-  // lower confidence more than simply having no match (incomplete, not misleading).
-  let conf = Math.max(1, Math.min(5, Math.round(Number(ai.confidence_score) || 1)));
-  if (evidence === "possible") conf = Math.min(conf, 3);
-  else if (evidence === "none") conf = Math.min(conf, 4);
-
-  return {
-    ...base,
-    "Visible CTA": ai.visible_cta || "Unknown",
-    "Likely Lead Gap": ai.likely_lead_gap || "Unknown",
-    "Likely Follow-Up Gap": ai.likely_follow_up_gap || "Unknown",
-    "Automation Opportunity": opp.text,
-    "Fit Score": total,
-    "Lead Temperature": temperature(total),
-    "Confidence Score": conf,
-    "Confidence Explanation": confidenceExplanation(evidence),
-    "Recommended Channel": ai.recommended_channel || "Phone/Text",
-    "First Message": ai.first_message || "",
-    "Follow-Up 1": ai.follow_up_1 || "",
-    "Follow-Up 2": ai.follow_up_2 || "",
-    "Close-The-Loop Message": ai.close_the_loop || "",
-    "Status": "New",
-    "Approved To Contact": "NO",
-    "Notes": `${ai.notes || ""}${publicContext}`.trim(),
-    scoreBreakdown: breakdown,
-    scoreWhy: scoreWhy(breakdown),
+    scoreBreakdown: dims,
+    scoreStrong,
+    scoreWeak,
+    scoreSource: score.source,
     opportunity: opp,
-    whatMatters: (ai.what_matters || "").trim(),
+    whatMatters: businessRead,
   };
 }
 

@@ -23,7 +23,7 @@ const PRIMARY_FILTERS = [
   "Follow-Up Needed", "Booked Call", "Not a Fit",
 ];
 // Lead-quality filters live in a compact secondary dropdown.
-const QUALITY_FILTERS = ["Hot Leads", "Warm Leads", "High Trust", "Needs Social Review"];
+const QUALITY_FILTERS = ["Hot Leads", "Warm Leads", "Cold Leads", "High Trust", "Needs Social Review"];
 
 const WORKFLOW = ["Search", "Review", "Approve", "Contact", "Export"];
 const STORAGE_KEY = "mf-workflow-v1";
@@ -92,6 +92,7 @@ function matchesQuality(lead, q) {
   switch (q) {
     case "Hot Leads": return scoreBand(lead["Fit Score"]) === "hot";
     case "Warm Leads": return scoreBand(lead["Fit Score"]) === "warm";
+    case "Cold Leads": return scoreBand(lead["Fit Score"]) === "cold";
     case "High Trust": return lead["Trust Level"] === "High";
     case "Needs Social Review": return lead.socialEvidence === "possible";
     default: return true; // "" = any quality
@@ -595,12 +596,20 @@ function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus, 
   );
 }
 
+// A Facebook URL that points at a person, not a business page.
+const isPersonProfile = (url) => /profile\.php|\/people\//i.test(String(url || ""));
+function presenceLabel(platform, c) {
+  if (platform === "Facebook" && isPersonProfile(c.url)) return `Owner / person match on ${platform}`;
+  return `Official ${platform} ${linkTypeLabel(c.linkType).toLowerCase()}`;
+}
+
 function MainMatch({ platform, c }) {
+  const person = platform === "Facebook" && isPersonProfile(c.url);
   return (
     <div className="pmatch">
       <div className="pmatch-top">
-        <span className="pmatch-plat">{platform} {linkTypeLabel(c.linkType)}</span>
-        <Badge kind="verified">High Confidence Match</Badge>
+        <span className="pmatch-plat">{presenceLabel(platform, c)}</span>
+        <Badge kind={person ? "review" : "verified"}>{person ? "Verify — not confirmed as page" : "High confidence"}</Badge>
         <a className="btn-link sm" href={extUrl(c.url)} target="_blank" rel="noreferrer">Open</a>
       </div>
       <a className="pmatch-url" href={extUrl(c.url)} target="_blank" rel="noreferrer">{hostOf(c.url)}</a>
@@ -633,25 +642,29 @@ function SupportingEvidence({ items }) {
   );
 }
 
-function ScoreDetails({ lead }) {
+function QualificationBreakdown({ lead }) {
   const [open, setOpen] = useState(false);
-  const breakdown = Array.isArray(lead.scoreBreakdown) ? lead.scoreBreakdown : [];
+  const dims = Array.isArray(lead.scoreBreakdown) ? lead.scoreBreakdown : [];
+  const total = lead["Fit Score"];
+  const source = lead.scoreSource || "Directional";
   return (
     <section className="sec">
-      <div className="sec-head"><h4>Score Details</h4><Badge kind="ai">AI / directional</Badge></div>
-      <div className="score-exp">Each dimension is rated 0–10 from public data and AI interpretation; the overall score (0–100) is a weighted blend. Directional — verify before outreach.</div>
+      <div className="sec-head"><h4>Qualification Breakdown</h4><Badge kind={source === "AI scored" ? "ai" : "social"}>{source}</Badge></div>
+      <div className="score-exp">Each dimension is scored 0–10. The total lead score is the sum of all dimensions.</div>
       <button className="collapse-toggle" onClick={() => setOpen((o) => !o)}>
-        {open ? "Hide score breakdown" : "View score breakdown"}
+        {open ? "Hide qualification breakdown" : "View qualification breakdown"}
       </button>
       {open && (
         <>
-          <div className="score-why">{lead.scoreWhy}</div>
+          <div className="qb-total">Total Lead Score: <strong>{total}/100</strong></div>
+          {lead.scoreStrong?.length > 0 && <div className="qb-line"><b>Strongest:</b> {lead.scoreStrong.join(", ")}</div>}
+          {lead.scoreWeak?.length > 0 && <div className="qb-line"><b>Weakest:</b> {lead.scoreWeak.join(", ")}</div>}
           <div className="bars">
-            {breakdown.map((b) => (
+            {dims.map((b) => (
               <div className="bar-row" key={b.label}>
                 <span className="bar-label">{b.label}</span>
                 <span className="bar-track"><span className="bar-fill" style={{ width: `${b.max ? (b.score / b.max) * 100 : 0}%` }} /></span>
-                <span className="bar-val">{b.score}/{b.max}</span>
+                <span className="bar-val">{b.score}/10</span>
               </div>
             ))}
           </div>
@@ -691,7 +704,7 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
 
   return (
     <div className="drawer">
-      {/* A. Lead Header */}
+      {/* 1. Lead Overview — summary + verified info combined */}
       <section className="sec lead-header">
         <div className="lh-top">
           <ScoreRing score={lead["Fit Score"]} size={72} showLabel />
@@ -704,6 +717,7 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
               <span><em>Temperature</em>{lead["Lead Temperature"]}</span>
               <span><em>Trust</em>{lead["Trust Level"]}</span>
               <span><em>Confidence</em>{dataConfidence(lead["Confidence Score"])}</span>
+              <span><em>Status</em>{lead["Status"]}</span>
             </div>
           </div>
           <div className="spacer" />
@@ -712,78 +726,73 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
           </button>
         </div>
         <div className="lh-move">Best First Move: <strong>{bestFirstMove(lead)}</strong></div>
-        <div className="status-actions">
-          <button className="secondary sm" onClick={() => onStatus(index, "Contacted")}>Mark Contacted</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Follow-Up Needed")}>Follow-Up Needed</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Booked Call")}>Booked Call</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Not a Fit")}>Not a Fit</button>
-        </div>
         {approved && <div className="approve-help">✓ Now in your Ready to Contact queue.</div>}
-      </section>
-
-      {/* B. What matters */}
-      <section className="sec">
-        <div className="sec-head"><h4>What matters</h4><Badge kind="ai">Directional</Badge></div>
-        <div className="matters-text">
-          {lead.whatMatters || opp?.offer || "Based on public data, this business may benefit from faster inquiry capture and follow-up."}
-        </div>
-      </section>
-
-      {/* C. Next action */}
-      <section className="sec">
-        <div className="sec-head"><h4>Next action</h4><Badge kind="review">Human review</Badge></div>
-        <div className="move-box">
-          <div className="move-big">{bestFirstMove(lead)}</div>
-          <div className="move-why">{bestMoveReason(lead)}</div>
-        </div>
-        {opp?.firstOffer && <div className="field-line"><span className="k">Suggested opener: </span>{opp.firstOffer}</div>}
-      </section>
-
-      {/* D. Verified info */}
-      <section className="sec">
-        <div className="sec-head"><h4>Verified info</h4><Badge kind="verified">Public data</Badge></div>
-        <div className="facts">
-          <div className="fact"><span>Website</span>{website ? <a href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a> : "—"}</div>
+        <div className="facts overview-facts">
           <div className="fact"><span>Phone</span>{lead["Phone"] || "—"}</div>
+          <div className="fact"><span>Website</span>{website ? <a href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a> : "—"}</div>
           <div className="fact"><span>Location</span>{lead["Location"] || "—"}</div>
           <div className="fact"><span>Rating</span>{lead.rating !== "" && lead.rating != null ? `${lead.rating}★${lead.reviews !== "" && lead.reviews != null ? ` · ${lead.reviews} reviews` : ""}` : "—"}</div>
           <div className="fact"><span>Category</span>{lead.category || "—"}</div>
         </div>
       </section>
 
-      {/* E. Social profiles */}
+      {/* 2. Online Presence */}
       <section className="sec">
         <div className="sec-head">
-          <h4>Social profiles</h4>
-          {mains.length ? <Badge kind="verified">Match found</Badge> : <Badge kind="review">Review needed</Badge>}
+          <h4>Online Presence</h4>
+          {mains.length ? <Badge kind="verified">Verified match</Badge> : <Badge kind="review">Review needed</Badge>}
+        </div>
+        <div className="actions">
+          {website && <a className="btn-link" href={extUrl(website)} target="_blank" rel="noreferrer">Open Website</a>}
         </div>
         {mains.length
           ? mains.map((m, i) => <MainMatch key={i} platform={m.platform} c={m.c} />)
-          : <div className="ev-none">No verified profile or page match yet — check supporting evidence.</div>}
+          : <div className="ev-none">No verified business profile or page matched yet.</div>}
         {supporting.length > 0 && <SupportingEvidence items={supporting} />}
       </section>
 
-      {/* F. Outreach messages */}
+      {/* 3. Business Read */}
       <section className="sec">
-        <div className="sec-head"><h4>Outreach messages</h4><Badge kind="review">Human review</Badge></div>
+        <div className="sec-head"><h4>Business Read</h4><Badge kind="ai">Directional</Badge></div>
+        <div className="matters-text">
+          {lead.whatMatters || opp?.offer || "Based on public data, this business may benefit from faster inquiry capture and follow-up."}
+        </div>
+      </section>
+
+      {/* 4. Outreach Plan — next action + messages + pipeline + notes */}
+      <section className="sec">
+        <div className="sec-head"><h4>Outreach Plan</h4><Badge kind="review">Human review</Badge></div>
+        <div className="move-box">
+          <div className="move-big">{bestFirstMove(lead)}</div>
+          <div className="move-why">{bestMoveReason(lead)}</div>
+        </div>
+        <div className="actions">
+          {website && <a className="btn-link" href={extUrl(website)} target="_blank" rel="noreferrer">Open Website</a>}
+          {lead["Phone"] && <a className="btn-link" href={`tel:${lead["Phone"]}`}>Call</a>}
+          {lead["Instagram"] && <a className="btn-link" href={extUrl(lead["Instagram"])} target="_blank" rel="noreferrer">Open Instagram</a>}
+          {lead["Facebook"] && <a className="btn-link" href={extUrl(lead["Facebook"])} target="_blank" rel="noreferrer">Open Facebook</a>}
+        </div>
+        {opp?.firstOffer && <div className="field-line"><span className="k">Suggested opener: </span>{opp.firstOffer}</div>}
         <Draft title="First Message" text={lead["First Message"]} />
         <Draft title="Follow-Up 1" text={lead["Follow-Up 1"]} />
         <Draft title="Follow-Up 2" text={lead["Follow-Up 2"]} />
         <Draft title="Close-The-Loop" text={lead["Close-The-Loop Message"]} />
         <div className="ai-note">AI-generated suggestions. Review and edit before any manual outreach — nothing is sent automatically.</div>
-      </section>
-
-      {/* G. Private notes */}
-      <section className="sec">
-        <div className="sec-head"><h4>Private notes</h4></div>
+        <div className="status-actions">
+          <button className="secondary sm" onClick={() => onStatus(index, "Contacted")}>Mark Contacted</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Follow-Up Needed")}>Follow-Up Needed</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Booked Call")}>Booked Call</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Not a Fit")}>Not a Fit</button>
+        </div>
+        <div className="notes-label">Private notes</div>
         <textarea
           className="notes" placeholder="Private notes (only you can see these)…"
           defaultValue={lead.notes || ""} onChange={(e) => onNotes(index, e.target.value)}
         />
       </section>
 
-      {/* G. Score details (collapsed) */}
-      <ScoreDetails lead={lead} />
+      {/* 5. Qualification Breakdown (collapsed) */}
+      <QualificationBreakdown lead={lead} />
     </div>
   );
 }

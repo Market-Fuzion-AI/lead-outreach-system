@@ -531,3 +531,19 @@ tr.detail > td { box-shadow: inset 3px 0 0 var(--accent); }
 /* Approved pipeline stage pill + row accent */
 .status-pill.approved { color: var(--verified); background: var(--verified-bg); }
 tr.lead-row.status-approved td:first-child { box-shadow: inset 3px 0 0 var(--verified); }
+
+/* ================================================================== *
+ * v7 — unified qualification + consolidated drawer
+ * ================================================================== */
+
+/* Lead Overview: verified facts under the summary */
+.overview-facts { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+
+/* Outreach Plan: notes label */
+.notes-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin: 16px 0 6px; }
+
+/* Qualification Breakdown */
+.qb-total { font-size: 14px; font-weight: 650; margin: 12px 0 8px; }
+.qb-total strong { font-variant-numeric: tabular-nums; }
+.qb-line { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-bottom: 4px; }
+.qb-line b { color: var(--text); font-weight: 600; }
