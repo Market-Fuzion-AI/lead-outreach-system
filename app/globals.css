@@ -380,3 +380,81 @@ button.sm { padding: 7px 12px; font-size: 12.5px; }
 
 .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: -2px; margin-right: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ================================================================== *
+ * v5 — persistence + favorites + calmer, Apple-like drawer polish
+ * ================================================================== */
+
+.filters-help { font-size: 12px; color: var(--muted); margin: -6px 2px 16px; }
+
+/* Favorite star */
+.star { background: none; border: none; padding: 0 2px; cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); }
+.star:hover { color: var(--social); filter: none; }
+.star.on { color: #f5b301; }
+
+.biz-line { display: flex; align-items: center; gap: 6px; }
+
+/* Connected selected row ↔ drawer */
+tr.lead-row.is-open td { background: var(--accent-weak); }
+tr.lead-row.is-open td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+tr.detail > td { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* Calmer drawer rhythm */
+.drawer { padding: 22px 22px 24px; gap: 22px; }
+.sec { padding: 18px; border-radius: 14px; }
+.sec-head { margin-bottom: 14px; }
+.sec-head h4 { font-size: 14px; }
+
+/* A. Lead header */
+.sec.lead-header { background: var(--panel); }
+.lh-top { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.lh-id { display: flex; flex-direction: column; gap: 8px; }
+.lh-name-row { display: flex; align-items: center; gap: 8px; }
+.lh-name { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.lh-name-row .star { font-size: 19px; }
+.lh-stats { display: flex; flex-wrap: wrap; gap: 20px; }
+.lh-stats span { display: flex; flex-direction: column; font-size: 13px; font-weight: 600; }
+.lh-stats em { font-style: normal; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; margin-bottom: 3px; }
+.lh-move { margin-top: 16px; font-size: 13.5px; color: var(--muted); }
+.lh-move strong { color: var(--text); }
+.status-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.saved-msg { display: inline-block; margin-top: 12px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.approve-help { margin-top: 12px; font-size: 13px; font-weight: 600; color: var(--verified); background: var(--verified-bg); border-radius: 9px; padding: 9px 12px; }
+.notes { margin-top: 14px; min-height: 44px; }
+
+/* B. What matters */
+.matters { display: flex; flex-direction: column; gap: 9px; }
+.matters p { margin: 0; font-size: 13.5px; line-height: 1.55; }
+.matters b { color: var(--muted); font-weight: 600; }
+.matters-quote { font-style: italic; color: var(--muted); border-left: 2px solid var(--border); padding-left: 12px; }
+
+/* C. Verified Info — compact facts */
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px 20px; }
+.fact { display: flex; flex-direction: column; gap: 3px; font-size: 13.5px; }
+.fact > span { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+.fact a { color: var(--accent); text-decoration: none; word-break: break-all; }
+.fact a:hover { text-decoration: underline; }
+
+/* D. Social profiles — main matches prominent */
+.pmatch { background: var(--verified-bg); border: 1px solid var(--verified); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+.pmatch:last-of-type { margin-bottom: 0; }
+.pmatch-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pmatch-plat { font-weight: 700; font-size: 13px; }
+.pmatch-top .btn-link { margin-left: auto; }
+.pmatch-url { display: inline-block; margin-top: 6px; color: var(--accent); text-decoration: none; font-size: 13px; word-break: break-all; }
+.pmatch-url:hover { text-decoration: underline; }
+
+/* supporting evidence — visually secondary + collapsed */
+.supporting { margin-top: 12px; }
+.collapse-toggle { background: none; border: none; color: var(--accent); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 4px 0; }
+.collapse-toggle:hover { filter: brightness(1.1); }
+.supporting-list { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.scand { border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; opacity: 0.9; }
+.scand-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.scand-plat { font-size: 12px; color: var(--muted); font-weight: 600; }
+.scand-top .btn-link { margin-left: auto; }
+.scand-reason { font-size: 12px; color: var(--muted); margin-top: 5px; }
+
+/* E / F helpers */
+.move-why { font-size: 12.5px; color: var(--muted); margin: 2px 0 6px; }
+.score-exp { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-bottom: 10px; }

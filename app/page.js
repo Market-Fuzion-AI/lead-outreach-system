@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toCSV } from "../lib/schema";
+import { mergeSaved } from "../lib/workflow";
 
 const PRESETS = [
   "Fitness", "Med Spa / Aesthetics", "Dental", "Chiropractic", "Roofing",
@@ -11,11 +12,13 @@ const PRESETS = [
 ];
 
 const FILTERS = [
-  "All", "Hot Leads", "High Trust", "Needs Social Review",
-  "Website Form", "Instagram DM", "Approved",
+  "All", "Hot Leads", "Warm Leads", "High Trust", "Needs Social Review",
+  "Favorites", "Approved", "Ready to Contact", "Contacted",
+  "Follow-Up Needed", "Booked Call", "Not a Fit",
 ];
 
 const WORKFLOW = ["Search", "Review", "Approve", "Contact", "Export"];
+const STORAGE_KEY = "mf-workflow-v1";
 
 const extUrl = (u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
 const hostOf = (u) => {
@@ -23,39 +26,32 @@ const hostOf = (u) => {
   catch { return u; }
 };
 
-// Premium score bands (independent of the backend temperature label).
 const scoreBand = (s) => (s >= 90 ? "hot" : s >= 65 ? "warm" : "cold");
 const bandLabel = (b) => (b === "hot" ? "Red Hot" : b === "warm" ? "Warm" : "Cold");
 
 const dataConfidence = (score) =>
   score >= 4 ? "High Confidence" : score >= 3 ? "Medium Confidence" : "Low Confidence";
 
-// Social labels — prefer "High Confidence / Likely" over "Verified".
 const socialLabel = (c) =>
-  c === "high" ? "High Confidence Match"
-    : c === "medium" ? "Likely Match — review manually"
-      : "Weak Match — do not use without review";
+  c === "high" ? "High Confidence Match" : c === "medium" ? "Likely Match" : "Weak Match";
 const socialKind = (c) => (c === "high" ? "verified" : c === "medium" ? "social" : "review");
 const linkTypeLabel = (t) =>
   t === "profile" ? "Profile" : t === "page" ? "Page" : t === "post" ? "Post" : t === "video" ? "Video" : "Link";
 
 const displayChannel = (ch) => (ch === "Facebook Messenger" ? "Facebook Message" : ch);
-
-// Best First Move: only surface a DM when a real profile/page main link exists.
 function bestFirstMove(lead) {
   const ch = lead["Recommended Channel"];
   if (ch === "Instagram DM" && !lead["Instagram"]) return lead["Website"] ? "Website Form" : "Phone/Text";
   if (ch === "Facebook Messenger" && !lead["Facebook"]) return lead["Website"] ? "Website Form" : "Phone/Text";
   return displayChannel(ch);
 }
-
 function bestMoveReason(lead) {
   const move = bestFirstMove(lead);
   if (move === "Instagram DM") return "A high-confidence Instagram profile was found.";
   if (move === "Facebook Message") return "A high-confidence Facebook page was found.";
   if (move === "Website Form") {
     return lead["Website"]
-      ? "Website is available with a likely contact path, and the social match is not high-confidence."
+      ? "Website is available and the social match is not high-confidence."
       : "Website form is the safest verifiable first channel.";
   }
   if (move === "Phone/Text") {
@@ -67,19 +63,6 @@ function bestMoveReason(lead) {
   return "Based on the available public data.";
 }
 
-function whyThisLead(lead) {
-  const trust = String(lead["Trust Level"]).toLowerCase();
-  const conf = dataConfidence(lead["Confidence Score"]).toLowerCase();
-  const parts = [
-    `${lead["Lead Temperature"]} — scores ${lead["Fit Score"]}/100 with ${trust} trust and ${conf} in the public data.`,
-  ];
-  if (lead["Likely Lead Gap"] && lead["Likely Lead Gap"] !== "Unknown") {
-    parts.push(`Likely gap: ${lead["Likely Lead Gap"]}`);
-  }
-  if (lead.opportunity?.offer) parts.push(`Where we could help: ${lead.opportunity.offer}`);
-  return parts.join(" ");
-}
-
 const STATUS_SLUG = {
   "New": "new", "Reviewing": "reviewing", "Ready to Contact": "ready",
   "Contacted": "contacted", "Follow-Up Needed": "followup",
@@ -87,29 +70,53 @@ const STATUS_SLUG = {
 };
 const statusSlug = (s) => STATUS_SLUG[s] || "new";
 
-function matchesFilter(lead, filter) {
-  switch (filter) {
-    case "Hot Leads": return lead["Lead Temperature"] === "Hot Lead";
+function matchesFilter(lead, f) {
+  switch (f) {
+    case "Hot Leads": return scoreBand(lead["Fit Score"]) === "hot";
+    case "Warm Leads": return scoreBand(lead["Fit Score"]) === "warm";
     case "High Trust": return lead["Trust Level"] === "High";
     case "Needs Social Review": return lead.socialEvidence === "possible";
-    case "Website Form": return bestFirstMove(lead) === "Website Form";
-    case "Instagram DM": return bestFirstMove(lead) === "Instagram DM";
+    case "Favorites": return !!lead.favorite;
     case "Approved": return lead["Approved To Contact"] === "YES";
+    case "Ready to Contact":
+    case "Contacted":
+    case "Follow-Up Needed":
+    case "Booked Call":
+    case "Not a Fit": return lead["Status"] === f;
     default: return true;
   }
 }
 
-// Split a platform's candidates into main / supporting posts / other possible.
 function groupSocial(mainUrl, candidates) {
   const main = candidates.find((c) => c.url === mainUrl) || null;
-  const rest = candidates.filter((c) => c !== main);
-  const posts = rest.filter((c) => c.linkType === "post" || c.linkType === "video");
-  const others = rest.filter((c) => c.linkType !== "post" && c.linkType !== "video");
-  return { main, posts, others };
+  const supporting = candidates.filter((c) => c !== main);
+  return { main, supporting };
+}
+
+// ---- localStorage wrappers (browser-only workflow state; no keys/PII beyond the lead) ----
+function loadSaved() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
+  catch { return {}; }
+}
+function persistSaved(map) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(map)); } catch { /* quota/unavailable */ }
 }
 
 function Badge({ kind, children }) {
   return <span className={`badge ${kind}`}>{children}</span>;
+}
+
+function StarButton({ on, onClick, className = "" }) {
+  return (
+    <button
+      className={`star${on ? " on" : ""} ${className}`}
+      onClick={onClick}
+      aria-label={on ? "Remove favorite" : "Add favorite"}
+      title={on ? "Favorited" : "Add to favorites"}
+    >
+      {on ? "★" : "☆"}
+    </button>
+  );
 }
 
 function ScoreRing({ score, size = 46, showLabel = false }) {
@@ -139,14 +146,10 @@ function CopyButton({ label, text }) {
   const [done, setDone] = useState(false);
   return (
     <button
-      className="secondary sm"
-      disabled={!text}
+      className="secondary sm" disabled={!text}
       onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text || "");
-          setDone(true);
-          setTimeout(() => setDone(false), 1200);
-        } catch { /* clipboard unavailable */ }
+        try { await navigator.clipboard.writeText(text || ""); setDone(true); setTimeout(() => setDone(false), 1200); }
+        catch { /* clipboard unavailable */ }
       }}
     >
       {done ? "Copied ✓" : label}
@@ -158,15 +161,9 @@ function GradientDefs() {
   return (
     <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
       <defs>
-        <linearGradient id="mf-grad-hot" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#ff8095" /><stop offset="100%" stopColor="#ff2d55" />
-        </linearGradient>
-        <linearGradient id="mf-grad-warm" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#ffd27a" /><stop offset="100%" stopColor="#ff8a00" />
-        </linearGradient>
-        <linearGradient id="mf-grad-cold" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#6db3ff" /><stop offset="100%" stopColor="#0071e3" />
-        </linearGradient>
+        <linearGradient id="mf-grad-hot" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#ff8095" /><stop offset="100%" stopColor="#ff2d55" /></linearGradient>
+        <linearGradient id="mf-grad-warm" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#ffd27a" /><stop offset="100%" stopColor="#ff8a00" /></linearGradient>
+        <linearGradient id="mf-grad-cold" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#6db3ff" /><stop offset="100%" stopColor="#0071e3" /></linearGradient>
       </defs>
     </svg>
   );
@@ -189,10 +186,16 @@ export default function Page() {
   const [filter, setFilter] = useState("All");
   const [flashId, setFlashId] = useState(null);
   const [theme, setTheme] = useState("light");
+  const [saved, setSaved] = useState({});
+  const savedRef = useRef({});
 
   useEffect(() => {
     setTheme(document.documentElement.getAttribute("data-theme") || "light");
+    const s = loadSaved();
+    setSaved(s);
+    savedRef.current = s;
   }, []);
+  useEffect(() => { savedRef.current = saved; }, [saved]);
 
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
@@ -225,7 +228,11 @@ export default function Page() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Search failed.");
-      setLeads(data.leads || []);
+      const { merged, next } = mergeSaved(data.leads || [], savedRef.current);
+      setLeads(merged);
+      setSaved(next);
+      savedRef.current = next;
+      persistSaved(next);
       setMeta(data.meta || null);
     } catch (e) {
       setError(e.message);
@@ -234,18 +241,36 @@ export default function Page() {
     }
   }
 
-  function setStatus(index, status) {
-    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Status": status } : l)));
+  function commitSaved(key, patch) {
+    setSaved((prev) => {
+      const next = { ...prev, [key]: { ...(prev[key] || {}), ...patch } };
+      persistSaved(next);
+      savedRef.current = next;
+      return next;
+    });
   }
-
+  function setStatus(index, status) {
+    const lead = leads[index]; if (!lead) return;
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Status": status } : l)));
+    commitSaved(lead._key, { status });
+  }
   function approveLead(index) {
-    setLeads((prev) =>
-      prev.map((l, i) =>
-        i === index ? { ...l, "Approved To Contact": "YES", "Status": "Ready to Contact" } : l
-      )
-    );
+    const lead = leads[index]; if (!lead) return;
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Approved To Contact": "YES", "Status": "Ready to Contact" } : l)));
+    commitSaved(lead._key, { approved: true, status: "Ready to Contact" });
     setFlashId(index);
     setTimeout(() => setFlashId((cur) => (cur === index ? null : cur)), 1300);
+  }
+  function toggleFavorite(index) {
+    const lead = leads[index]; if (!lead) return;
+    const fav = !lead.favorite;
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, favorite: fav } : l)));
+    commitSaved(lead._key, { favorite: fav });
+  }
+  function setNotes(index, notes) {
+    const lead = leads[index]; if (!lead) return;
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, notes } : l)));
+    commitSaved(lead._key, { notes });
   }
 
   function exportCSV() {
@@ -345,6 +370,7 @@ export default function Page() {
               );
             })}
           </div>
+          <div className="filters-help">Statuses and favorites are saved in this browser only.</div>
 
           <div className="table-scroll">
             <table>
@@ -372,6 +398,8 @@ export default function Page() {
                       onToggle={() => setOpenRow(openRow === i ? null : i)}
                       onApprove={approveLead}
                       onStatus={setStatus}
+                      onFavorite={toggleFavorite}
+                      onNotes={setNotes}
                     />
                   ))
                 )}
@@ -384,7 +412,7 @@ export default function Page() {
   );
 }
 
-function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus }) {
+function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus, onFavorite, onNotes }) {
   const approved = lead["Approved To Contact"] === "YES";
   const slug = statusSlug(lead["Status"]);
   return (
@@ -395,7 +423,10 @@ function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus }
       >
         <td>
           <div className="biz-cell">
-            <span className="biz-name">{lead["Business Name"]}</span>
+            <div className="biz-line">
+              <StarButton on={lead.favorite} onClick={(e) => { e.stopPropagation(); onFavorite(index); }} />
+              <span className="biz-name">{lead["Business Name"]}</span>
+            </div>
             <span className={`trust-chip ${String(lead["Trust Level"]).toLowerCase()}`}>{lead["Trust Level"]} trust</span>
           </div>
         </td>
@@ -413,7 +444,10 @@ function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus }
       {open && (
         <tr className="detail">
           <td colSpan={6}>
-            <EvidenceDrawer lead={lead} index={index} onApprove={onApprove} onStatus={onStatus} />
+            <EvidenceDrawer
+              lead={lead} index={index}
+              onApprove={onApprove} onStatus={onStatus} onFavorite={onFavorite} onNotes={onNotes}
+            />
           </td>
         </tr>
       )}
@@ -421,56 +455,69 @@ function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus }
   );
 }
 
-function CandidateItem({ platform, c, isMain }) {
+function MainMatch({ platform, c }) {
   return (
-    <div className={`smatch${isMain ? " main" : ""}`}>
-      <div className="smatch-top">
-        <span className="smatch-plat">{platform}</span>
-        <span className="smatch-type">{linkTypeLabel(c.linkType)}</span>
-        <Badge kind={socialKind(c.confidence)}>{socialLabel(c.confidence)}</Badge>
+    <div className="pmatch">
+      <div className="pmatch-top">
+        <span className="pmatch-plat">{platform} {linkTypeLabel(c.linkType)}</span>
+        <Badge kind="verified">High Confidence Match</Badge>
         <a className="btn-link sm" href={extUrl(c.url)} target="_blank" rel="noreferrer">Open</a>
       </div>
-      <div className="smatch-reason">{c.matchReason}</div>
-      {c.sharedDistinctiveTerms?.length > 0 && (
-        <div className="smatch-terms">Shared terms: {c.sharedDistinctiveTerms.join(", ")}</div>
+      <a className="pmatch-url" href={extUrl(c.url)} target="_blank" rel="noreferrer">{hostOf(c.url)}</a>
+    </div>
+  );
+}
+
+function SupportingEvidence({ items }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="supporting">
+      <button className="collapse-toggle" onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide" : "Show"} supporting evidence ({items.length})
+      </button>
+      {open && (
+        <div className="supporting-list">
+          {items.map(({ platform, c }, i) => (
+            <div className="scand" key={i}>
+              <div className="scand-top">
+                <span className="scand-plat">{platform} · {linkTypeLabel(c.linkType)}</span>
+                <Badge kind={socialKind(c.confidence)}>{socialLabel(c.confidence)}</Badge>
+                <a className="btn-link sm" href={extUrl(c.url)} target="_blank" rel="noreferrer">Open</a>
+              </div>
+              <div className="scand-reason">{c.matchReason}</div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function SocialMatchReview({ lead }) {
-  const ig = groupSocial(lead["Instagram"], lead.instagramCandidates || []);
-  const fb = groupSocial(lead["Facebook"], lead.facebookCandidates || []);
-  const tag = (platform, arr) => arr.map((c) => ({ platform, c }));
-
-  const mains = [
-    ...(ig.main ? tag("Instagram", [ig.main]) : []),
-    ...(fb.main ? tag("Facebook", [fb.main]) : []),
-  ];
-  const posts = [...tag("Instagram", ig.posts), ...tag("Facebook", fb.posts)];
-  const others = [...tag("Instagram", ig.others), ...tag("Facebook", fb.others)];
-
+function ScoreDetails({ lead }) {
+  const [open, setOpen] = useState(false);
+  const breakdown = Array.isArray(lead.scoreBreakdown) ? lead.scoreBreakdown : [];
   return (
-    <>
-      <div className="smatch-group">
-        <div className="smatch-h">Main Profile / Page Match</div>
-        {mains.length
-          ? mains.map(({ platform, c }, i) => <CandidateItem key={i} platform={platform} c={c} isMain />)
-          : <div className="ev-none">No high-confidence profile or page match — manual review required.</div>}
-      </div>
-      <div className="smatch-group">
-        <div className="smatch-h">Supporting Posts Found</div>
-        {posts.length
-          ? posts.map(({ platform, c }, i) => <CandidateItem key={i} platform={platform} c={c} />)
-          : <div className="ev-none">None.</div>}
-      </div>
-      <div className="smatch-group">
-        <div className="smatch-h">Other Possible Matches</div>
-        {others.length
-          ? others.map(({ platform, c }, i) => <CandidateItem key={i} platform={platform} c={c} />)
-          : <div className="ev-none">None.</div>}
-      </div>
-    </>
+    <section className="sec">
+      <div className="sec-head"><h4>Score Details</h4><Badge kind="ai">AI / directional</Badge></div>
+      <div className="score-exp">Score is based on public data, social match confidence, and AI-estimated automation opportunity.</div>
+      <button className="collapse-toggle" onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide score breakdown" : "View score breakdown"}
+      </button>
+      {open && (
+        <>
+          <div className="score-why">{lead.scoreWhy}</div>
+          <div className="bars">
+            {breakdown.map((b) => (
+              <div className="bar-row" key={b.label}>
+                <span className="bar-label">{b.label}</span>
+                <span className="bar-track"><span className="bar-fill" style={{ width: `${b.max ? (b.score / b.max) * 100 : 0}%` }} /></span>
+                <span className="bar-val">{b.score}/{b.max}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -486,158 +533,116 @@ function Draft({ title, text }) {
   );
 }
 
-function socialStatus(mainUrl, cands) {
-  if (mainUrl) return { text: "High Confidence Match", kind: "verified" };
-  if (cands.length) return { text: "Needs review", kind: "social" };
-  return { text: "No confident match", kind: "review" };
-}
+function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes }) {
+  const [savedMsg, setSavedMsg] = useState(false);
+  useEffect(() => {
+    if (!savedMsg) return;
+    const t = setTimeout(() => setSavedMsg(false), 1600);
+    return () => clearTimeout(t);
+  }, [savedMsg]);
+  const flash = () => setSavedMsg(true);
 
-function EvidenceDrawer({ lead, index, onApprove, onStatus }) {
   const website = lead["Website"];
   const approved = lead["Approved To Contact"] === "YES";
-  const breakdown = Array.isArray(lead.scoreBreakdown) ? lead.scoreBreakdown : [];
   const opp = lead.opportunity;
-  const igStatus = socialStatus(lead["Instagram"], lead.instagramCandidates || []);
-  const fbStatus = socialStatus(lead["Facebook"], lead.facebookCandidates || []);
+
+  const igG = groupSocial(lead["Instagram"], lead.instagramCandidates || []);
+  const fbG = groupSocial(lead["Facebook"], lead.facebookCandidates || []);
+  const mains = [
+    ...(igG.main ? [{ platform: "Instagram", c: igG.main }] : []),
+    ...(fbG.main ? [{ platform: "Facebook", c: fbG.main }] : []),
+  ];
+  const supporting = [
+    ...igG.supporting.map((c) => ({ platform: "Instagram", c })),
+    ...fbG.supporting.map((c) => ({ platform: "Facebook", c })),
+  ];
 
   return (
     <div className="drawer">
-      {/* A. Lead Summary */}
-      <section className="sec summary">
-        <div className="summary-main">
+      {/* A. Lead Header */}
+      <section className="sec lead-header">
+        <div className="lh-top">
           <ScoreRing score={lead["Fit Score"]} size={72} showLabel />
-          <div className="summary-info">
-            <div className="summary-name">{lead["Business Name"]}</div>
-            <div className="summary-stats">
+          <div className="lh-id">
+            <div className="lh-name-row">
+              <StarButton on={lead.favorite} onClick={() => { onFavorite(index); flash(); }} />
+              <span className="lh-name">{lead["Business Name"]}</span>
+            </div>
+            <div className="lh-stats">
               <span><em>Temperature</em>{lead["Lead Temperature"]}</span>
               <span><em>Trust</em>{lead["Trust Level"]}</span>
               <span><em>Confidence</em>{dataConfidence(lead["Confidence Score"])}</span>
             </div>
           </div>
           <div className="spacer" />
-          <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => onApprove(index)} disabled={approved}>
+          <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => { onApprove(index); flash(); }} disabled={approved}>
             {approved ? "✓ Approved" : "Approve Lead"}
           </button>
         </div>
+        <div className="lh-move">Best First Move: <strong>{bestFirstMove(lead)}</strong></div>
         <div className="status-actions">
-          <button className="secondary sm" onClick={() => onStatus(index, "Contacted")}>Mark Contacted</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Follow-Up Needed")}>Follow-Up Needed</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Booked Call")}>Booked Call</button>
-          <button className="secondary sm" onClick={() => onStatus(index, "Not a Fit")}>Not a Fit</button>
+          <button className="secondary sm" onClick={() => { onStatus(index, "Contacted"); flash(); }}>Mark Contacted</button>
+          <button className="secondary sm" onClick={() => { onStatus(index, "Follow-Up Needed"); flash(); }}>Follow-Up Needed</button>
+          <button className="secondary sm" onClick={() => { onStatus(index, "Booked Call"); flash(); }}>Booked Call</button>
+          <button className="secondary sm" onClick={() => { onStatus(index, "Not a Fit"); flash(); }}>Not a Fit</button>
         </div>
-        {approved && <div className="approve-help">✓ This lead is now in your Ready to Contact queue.</div>}
+        {savedMsg && <div className="saved-msg">Saved in this browser.</div>}
+        {approved && <div className="approve-help">✓ Now in your Ready to Contact queue.</div>}
+        <textarea
+          className="notes" placeholder="Your notes (saved in this browser)…"
+          value={lead.notes || ""} onChange={(e) => { onNotes(index, e.target.value); flash(); }}
+        />
       </section>
 
-      {/* B. Why This Lead */}
+      {/* B. What matters */}
       <section className="sec">
-        <div className="sec-head"><h4>Why This Lead</h4></div>
-        <div className="field-line">{whyThisLead(lead)}</div>
+        <div className="sec-head"><h4>What matters</h4></div>
+        <div className="matters">
+          <p><b>Worth a look:</b> {opp?.problem || "May benefit from faster inquiry capture and follow-up, based on public data."}</p>
+          <p><b>Likely gap:</b> {lead["Likely Lead Gap"] && lead["Likely Lead Gap"] !== "Unknown" ? lead["Likely Lead Gap"] : "Not clear from public data."}</p>
+          <p><b>What we could offer first:</b> {opp?.offer || lead["Automation Opportunity"]}</p>
+          {opp?.firstOffer && <p className="matters-quote">“{opp.firstOffer}”</p>}
+        </div>
       </section>
 
-      {/* C. Trust & Evidence — compact cards */}
+      {/* C. Verified Info */}
       <section className="sec">
-        <div className="sec-head">
-          <h4>Trust &amp; Evidence</h4>
-          <Badge kind="verified">Public data via Serper</Badge>
-        </div>
-        <div className="cards">
-          <div className="card">
-            <div className="card-h">Business Info</div>
-            <div className="kv"><span>Category</span><b>{lead.category || "—"}</b></div>
-            <div className="kv"><span>Business name</span><b>{lead["Business Name"]}</b></div>
-            <div className="kv"><span>Location</span><b>{lead["Location"] || "—"}</b></div>
-          </div>
-          <div className="card">
-            <div className="card-h">Contact Info</div>
-            <div className="kv"><span>Phone</span><b>{lead["Phone"] || "—"}</b></div>
-            <div className="kv"><span>Website</span>{website ? <a href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a> : <b>—</b>}</div>
-            <div className="kv"><span>Email</span><b>{lead["Email"] || "Not available"}</b></div>
-          </div>
-          <div className="card">
-            <div className="card-h">Public Signals</div>
-            <div className="kv"><span>Rating</span><b>{lead.rating !== "" && lead.rating != null ? `${lead.rating}★` : "—"}</b></div>
-            <div className="kv"><span>Reviews</span><b>{lead.reviews !== "" && lead.reviews != null ? lead.reviews : "—"}</b></div>
-            <div className="kv"><span>Source</span><b>Serper / Google public data</b></div>
-          </div>
-          <div className="card">
-            <div className="card-h">Social Evidence</div>
-            <div className="kv"><span>Instagram</span><Badge kind={igStatus.kind}>{igStatus.text}</Badge></div>
-            <div className="kv"><span>Facebook</span><Badge kind={fbStatus.kind}>{fbStatus.text}</Badge></div>
-            <div className="kv"><span>Human review</span><b>Needed</b></div>
-          </div>
+        <div className="sec-head"><h4>Verified Info</h4><Badge kind="verified">Public data</Badge></div>
+        <div className="facts">
+          <div className="fact"><span>Website</span>{website ? <a href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a> : "—"}</div>
+          <div className="fact"><span>Phone</span>{lead["Phone"] || "—"}</div>
+          <div className="fact"><span>Location</span>{lead["Location"] || "—"}</div>
+          <div className="fact"><span>Rating</span>{lead.rating !== "" && lead.rating != null ? `${lead.rating}★${lead.reviews !== "" && lead.reviews != null ? ` · ${lead.reviews} reviews` : ""}` : "—"}</div>
+          <div className="fact"><span>Category</span>{lead.category || "—"}</div>
         </div>
       </section>
 
-      {/* D. Social Match Review — grouped */}
+      {/* D. Social Profiles */}
       <section className="sec">
         <div className="sec-head">
-          <h4>Social Match Review</h4>
-          <Badge kind="review">Human review required</Badge>
+          <h4>Social Profiles</h4>
+          {mains.length ? <Badge kind="verified">Match found</Badge> : <Badge kind="review">Review needed</Badge>}
         </div>
-        <SocialMatchReview lead={lead} />
-        <div className="ai-note">A social link becomes the main profile only on a high-confidence profile/page match. Posts and weak matches are supporting evidence — confirm manually before any outreach.</div>
+        {mains.length
+          ? mains.map((m, i) => <MainMatch key={i} platform={m.platform} c={m.c} />)
+          : <div className="ev-none">No verified profile or page match yet — check supporting evidence.</div>}
+        {supporting.length > 0 && <SupportingEvidence items={supporting} />}
       </section>
 
-      {/* E. Recommended Opportunity */}
+      {/* E. Suggested Outreach */}
       <section className="sec">
-        <div className="sec-head">
-          <h4>Recommended Opportunity</h4>
-          <Badge kind="ai">AI-generated recommendation</Badge>
-        </div>
-        {opp && (opp.problem || opp.offer || opp.why || opp.firstOffer) ? (
-          <div className="opp">
-            {opp.problem && <div className="opp-row"><span className="opp-k">Problem</span><span>{opp.problem}</span></div>}
-            {opp.offer && <div className="opp-row"><span className="opp-k">Possible offer</span><span>{opp.offer}</span></div>}
-            {opp.why && <div className="opp-row"><span className="opp-k">Why it matters</span><span>{opp.why}</span></div>}
-            {opp.firstOffer && <div className="opp-row"><span className="opp-k">Suggested first offer</span><span>{opp.firstOffer}</span></div>}
-          </div>
-        ) : (
-          <div className="field-line">{lead["Automation Opportunity"]}</div>
-        )}
-        <div className="ai-note">Based on available public data only. Uses “may” / “likely” — verify before pitching.</div>
-      </section>
-
-      {/* F. Suggested Outreach */}
-      <section className="sec">
-        <div className="sec-head">
-          <h4>Suggested Outreach</h4>
-          <Badge kind="review">Human review required</Badge>
-        </div>
-        <div className="move-box">
-          <div className="move-big">{bestFirstMove(lead)}</div>
-          <div className="move-why">{bestMoveReason(lead)}</div>
-        </div>
-
-        <div className="actions">
-          {website && <a className="btn-link" href={extUrl(website)} target="_blank" rel="noreferrer">Open Website</a>}
-          {lead["Instagram"] && <a className="btn-link" href={extUrl(lead["Instagram"])} target="_blank" rel="noreferrer">Open Instagram</a>}
-          {lead["Facebook"] && <a className="btn-link" href={extUrl(lead["Facebook"])} target="_blank" rel="noreferrer">Open Facebook</a>}
-        </div>
-
+        <div className="sec-head"><h4>Suggested Outreach</h4><Badge kind="review">Human review</Badge></div>
+        <div className="field-line"><span className="k">Recommended channel: </span>{bestFirstMove(lead)}</div>
+        <div className="move-why">{bestMoveReason(lead)}</div>
         <Draft title="First Message" text={lead["First Message"]} />
         <Draft title="Follow-Up 1" text={lead["Follow-Up 1"]} />
         <Draft title="Follow-Up 2" text={lead["Follow-Up 2"]} />
         <Draft title="Close-The-Loop" text={lead["Close-The-Loop Message"]} />
-        <div className="ai-note">These drafts are AI-generated suggestions. Review and edit before any manual outreach.</div>
+        <div className="ai-note">AI-generated suggestions. Review and edit before any manual outreach — nothing is sent automatically.</div>
       </section>
 
-      {/* G. Score Breakdown */}
-      <section className="sec">
-        <div className="sec-head">
-          <h4>Score Breakdown</h4>
-          <Badge kind="ai">AI / directional</Badge>
-        </div>
-        <div className="score-why">{lead.scoreWhy}</div>
-        <div className="bars">
-          {breakdown.map((b) => (
-            <div className="bar-row" key={b.label}>
-              <span className="bar-label">{b.label}</span>
-              <span className="bar-track"><span className="bar-fill" style={{ width: `${b.max ? (b.score / b.max) * 100 : 0}%` }} /></span>
-              <span className="bar-val">{b.score}/{b.max}</span>
-            </div>
-          ))}
-        </div>
-      </section>
+      {/* F. Score Details (collapsed) */}
+      <ScoreDetails lead={lead} />
     </div>
   );
 }
