@@ -38,12 +38,57 @@ You need:
 
 Keys live only in `.env.local` and are used **server-side**. They are never sent to the browser. Do not commit `.env.local`.
 
+## Firebase (Auth + saved leads)
+
+Sign-in and saved pipeline state use Firebase. If the Firebase env vars are **not** set,
+the app runs in local-only mode (workflow state saved in the browser). Once set, users
+sign in with Google and their favorites / approvals / notes / status persist to Firestore.
+
+Set up:
+1. Create a Firebase project → add a **Web app** → copy the config.
+2. In **Authentication**, enable the **Google** sign-in provider.
+3. In **Firestore Database**, create a database (production mode).
+4. Add these **public** client vars to `.env.local` (see `.env.local.example`):
+   ```
+   NEXT_PUBLIC_FIREBASE_API_KEY
+   NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+   NEXT_PUBLIC_FIREBASE_PROJECT_ID
+   NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+   NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+   NEXT_PUBLIC_FIREBASE_APP_ID
+   ```
+   These are safe to expose to the browser. **Serper/OpenAI keys stay server-side — never prefix them with `NEXT_PUBLIC_`.**
+
+Data model: `users/{userId}/leads/{leadKey}` — one doc per saved lead, keyed by a stable
+lead key (normalized name + phone + website domain + city). Writes are merges, so a new
+search refreshes public info without clobbering your favorite / approval / status / notes.
+
+**Firestore security rules** (Console → Firestore → Rules) — each user can only touch their own leads:
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/leads/{leadId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
+```
+
 ## Deploy to Vercel
 
 ```bash
-# push to GitHub, import the repo in Vercel, then add the two env vars in
-# Project → Settings → Environment Variables (SERPER_API_KEY, OPENAI_API_KEY).
+# push to GitHub, import the repo in Vercel, then add the env vars in
+# Project → Settings → Environment Variables.
 ```
+
+Add these in Vercel:
+- Server-side (secret): `SERPER_API_KEY`, `OPENAI_API_KEY`, and optionally `OPENAI_MODEL`.
+- Firebase client (public): `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`,
+  `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`,
+  `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`.
+
+After deploying, add your Vercel domain to Firebase → Authentication → Settings → **Authorized domains**.
 
 The `/api/prospect` route runs as a Node serverless function (`maxDuration = 60`).
 

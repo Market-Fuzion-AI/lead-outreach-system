@@ -1,8 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
 import { toCSV } from "../lib/schema";
 import { mergeSaved } from "../lib/workflow";
+import {
+  isFirebaseConfigured, auth, googleProvider, fetchSavedLeads, saveLead,
+} from "../lib/firebase";
 
 const PRESETS = [
   "Fitness", "Med Spa / Aesthetics", "Dental", "Chiropractic", "Roofing",
@@ -13,7 +17,7 @@ const PRESETS = [
 
 const FILTERS = [
   "All", "Hot Leads", "Warm Leads", "High Trust", "Needs Social Review",
-  "Favorites", "Approved", "Ready to Contact", "Contacted",
+  "Favorites", "Saved", "Approved", "Ready to Contact", "Contacted",
   "Follow-Up Needed", "Booked Call", "Not a Fit",
 ];
 
@@ -64,9 +68,8 @@ function bestMoveReason(lead) {
 }
 
 const STATUS_SLUG = {
-  "New": "new", "Reviewing": "reviewing", "Ready to Contact": "ready",
-  "Contacted": "contacted", "Follow-Up Needed": "followup",
-  "Booked Call": "booked", "Not a Fit": "notfit",
+  "New": "new", "Reviewing": "reviewing", "Approved": "approved", "Ready to Contact": "ready",
+  "Contacted": "contacted", "Follow-Up Needed": "followup", "Booked Call": "booked", "Not a Fit": "notfit",
 };
 const statusSlug = (s) => STATUS_SLUG[s] || "new";
 
@@ -77,6 +80,7 @@ function matchesFilter(lead, f) {
     case "High Trust": return lead["Trust Level"] === "High";
     case "Needs Social Review": return lead.socialEvidence === "possible";
     case "Favorites": return !!lead.favorite;
+    case "Saved": return !!lead._saved;
     case "Approved": return lead["Approved To Contact"] === "YES";
     case "Ready to Contact":
     case "Contacted":
@@ -93,7 +97,7 @@ function groupSocial(mainUrl, candidates) {
   return { main, supporting };
 }
 
-// ---- localStorage wrappers (browser-only workflow state; no keys/PII beyond the lead) ----
+// ---- localStorage fallback (only used when Firebase is not configured) ----
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
   catch { return {}; }
@@ -106,14 +110,9 @@ function Badge({ kind, children }) {
   return <span className={`badge ${kind}`}>{children}</span>;
 }
 
-function StarButton({ on, onClick, className = "" }) {
+function StarButton({ on, onClick }) {
   return (
-    <button
-      className={`star${on ? " on" : ""} ${className}`}
-      onClick={onClick}
-      aria-label={on ? "Remove favorite" : "Add favorite"}
-      title={on ? "Favorited" : "Add to favorites"}
-    >
+    <button className={`star${on ? " on" : ""}`} onClick={onClick} aria-label={on ? "Remove favorite" : "Add favorite"} title={on ? "Favorited" : "Add to favorites"}>
       {on ? "★" : "☆"}
     </button>
   );
@@ -145,13 +144,11 @@ function ScoreRing({ score, size = 46, showLabel = false }) {
 function CopyButton({ label, text }) {
   const [done, setDone] = useState(false);
   return (
-    <button
-      className="secondary sm" disabled={!text}
+    <button className="secondary sm" disabled={!text}
       onClick={async () => {
         try { await navigator.clipboard.writeText(text || ""); setDone(true); setTimeout(() => setDone(false), 1200); }
         catch { /* clipboard unavailable */ }
-      }}
-    >
+      }}>
       {done ? "Copied ✓" : label}
     </button>
   );
@@ -166,6 +163,34 @@ function GradientDefs() {
         <linearGradient id="mf-grad-cold" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#6db3ff" /><stop offset="100%" stopColor="#0071e3" /></linearGradient>
       </defs>
     </svg>
+  );
+}
+
+function ThemeButton({ theme, onToggle }) {
+  return (
+    <button className="theme-btn" onClick={onToggle} aria-label="Toggle color theme">
+      {theme === "dark" ? "☀︎ Light" : "☾ Dark"}
+    </button>
+  );
+}
+
+function SignInScreen({ onSignIn, theme, onToggleTheme }) {
+  return (
+    <div className="wrap">
+      <div className="topbar">
+        <div className="brand">
+          <h1>Market Fuzion — Prospecting Command Center</h1>
+          <p>Research and prepare leads. You approve. You send.</p>
+        </div>
+        <ThemeButton theme={theme} onToggle={onToggleTheme} />
+      </div>
+      <div className="signin-card">
+        <div className="signin-icon">◎</div>
+        <h2>Sign in to save leads and pipeline progress.</h2>
+        <p>Your favorites, approvals, notes, and pipeline status are saved to your account and follow you across devices and refreshes.</p>
+        <button className="google-btn" onClick={onSignIn}>Continue with Google</button>
+      </div>
+    </div>
   );
 }
 
@@ -186,53 +211,75 @@ export default function Page() {
   const [filter, setFilter] = useState("All");
   const [flashId, setFlashId] = useState(null);
   const [theme, setTheme] = useState("light");
-  const [saved, setSaved] = useState({});
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(!isFirebaseConfigured);
+  const [toast, setToast] = useState(null);
   const savedRef = useRef({});
+  const notesTimer = useRef(null);
+
+  useEffect(() => { setTheme(document.documentElement.getAttribute("data-theme") || "light"); }, []);
 
   useEffect(() => {
-    setTheme(document.documentElement.getAttribute("data-theme") || "light");
-    const s = loadSaved();
-    setSaved(s);
-    savedRef.current = s;
-  }, []);
-  useEffect(() => { savedRef.current = saved; }, [saved]);
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 1800);
+    return () => clearTimeout(t);
+  }, [toast]);
 
+  // Auth + saved-state loading. Local-only fallback when Firebase isn't configured.
+  useEffect(() => {
+    if (!isFirebaseConfigured) {
+      const s = loadSaved();
+      savedRef.current = s;
+      return;
+    }
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      setAuthReady(true);
+      if (u) {
+        try {
+          const map = await fetchSavedLeads(u.uid);
+          savedRef.current = map;
+          setLeads((prev) => mergeSaved(prev, map).merged);
+        } catch { showToast("Couldn't load saved leads.", "error"); }
+      } else {
+        savedRef.current = {};
+        setLeads((prev) => mergeSaved(prev, {}).merged);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  function showToast(msg, kind = "ok") { setToast({ msg, kind }); }
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
     document.documentElement.setAttribute("data-theme", next);
     try { localStorage.setItem("mf-theme", next); } catch {}
   }
+  async function signIn() {
+    try { await signInWithPopup(auth, googleProvider); }
+    catch (e) { if (e?.code !== "auth/popup-closed-by-user" && e?.code !== "auth/cancelled-popup-request") showToast("Sign-in failed.", "error"); }
+  }
+  async function signOutUser() { try { await signOut(auth); } catch { /* ignore */ } }
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const effectiveCategory = form.categoryPreset === "Custom" ? form.customCategory : form.categoryPreset;
 
   async function runSearch() {
-    setLoading(true);
-    setError("");
-    setLeads([]);
-    setMeta(null);
-    setOpenRow(null);
-    setFilter("All");
+    setLoading(true); setError(""); setLeads([]); setMeta(null); setOpenRow(null); setFilter("All");
     try {
       const res = await fetch("/api/prospect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          category: effectiveCategory,
-          keywords: form.keywords,
-          location: form.location,
-          maxResults: Number(form.maxResults),
-          excludedFranchises: form.excludedFranchises,
+          category: effectiveCategory, keywords: form.keywords, location: form.location,
+          maxResults: Number(form.maxResults), excludedFranchises: form.excludedFranchises,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Search failed.");
-      const { merged, next } = mergeSaved(data.leads || [], savedRef.current);
+      const { merged } = mergeSaved(data.leads || [], savedRef.current);
       setLeads(merged);
-      setSaved(next);
-      savedRef.current = next;
-      persistSaved(next);
       setMeta(data.meta || null);
     } catch (e) {
       setError(e.message);
@@ -241,36 +288,46 @@ export default function Page() {
     }
   }
 
-  function commitSaved(key, patch) {
-    setSaved((prev) => {
-      const next = { ...prev, [key]: { ...(prev[key] || {}), ...patch } };
-      persistSaved(next);
+  // Persist a lead's workflow change to Firestore (signed in) or localStorage (local mode).
+  async function commitSaved(lead, patch) {
+    const key = lead._key;
+    if (user) {
+      try {
+        await saveLead(user.uid, lead, patch, !lead._saved);
+        savedRef.current = { ...savedRef.current, [key]: { ...(savedRef.current[key] || {}), ...patch, score: savedRef.current[key]?.score ?? lead["Fit Score"] } };
+        showToast("Saved");
+      } catch { showToast("Couldn't save. Try again.", "error"); }
+    } else if (!isFirebaseConfigured) {
+      const next = { ...savedRef.current, [key]: { ...(savedRef.current[key] || {}), ...patch, score: savedRef.current[key]?.score ?? lead["Fit Score"] } };
       savedRef.current = next;
-      return next;
-    });
+      persistSaved(next);
+      showToast("Saved");
+    }
   }
-  function setStatus(index, status) {
-    const lead = leads[index]; if (!lead) return;
-    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Status": status } : l)));
-    commitSaved(lead._key, { status });
-  }
-  function approveLead(index) {
-    const lead = leads[index]; if (!lead) return;
-    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Approved To Contact": "YES", "Status": "Ready to Contact" } : l)));
-    commitSaved(lead._key, { approved: true, status: "Ready to Contact" });
-    setFlashId(index);
-    setTimeout(() => setFlashId((cur) => (cur === index ? null : cur)), 1300);
-  }
+
   function toggleFavorite(index) {
     const lead = leads[index]; if (!lead) return;
     const fav = !lead.favorite;
-    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, favorite: fav } : l)));
-    commitSaved(lead._key, { favorite: fav });
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, favorite: fav, _saved: true } : l)));
+    commitSaved(lead, { favorite: fav });
+  }
+  function approveLead(index) {
+    const lead = leads[index]; if (!lead) return;
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Approved To Contact": "YES", "Status": "Ready to Contact", _saved: true } : l)));
+    commitSaved(lead, { approved: true, status: "Ready to Contact" });
+    setFlashId(index);
+    setTimeout(() => setFlashId((cur) => (cur === index ? null : cur)), 1300);
+  }
+  function setStatus(index, status) {
+    const lead = leads[index]; if (!lead) return;
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Status": status, _saved: true } : l)));
+    commitSaved(lead, { status });
   }
   function setNotes(index, notes) {
     const lead = leads[index]; if (!lead) return;
-    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, notes } : l)));
-    commitSaved(lead._key, { notes });
+    setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, notes, _saved: true } : l)));
+    clearTimeout(notesTimer.current);
+    notesTimer.current = setTimeout(() => commitSaved({ ...lead, notes }, { notes }), 700);
   }
 
   function exportCSV() {
@@ -285,6 +342,14 @@ export default function Page() {
     URL.revokeObjectURL(url);
   }
 
+  // Gate behind Google sign-in when Firebase is configured.
+  if (isFirebaseConfigured && !authReady) {
+    return <div className="wrap"><div className="loading-screen"><span className="spinner" />Loading…</div></div>;
+  }
+  if (isFirebaseConfigured && !user) {
+    return <SignInScreen onSignIn={signIn} theme={theme} onToggleTheme={toggleTheme} />;
+  }
+
   const shown = leads.map((l, i) => ({ l, i })).filter(({ l }) => matchesFilter(l, filter));
 
   return (
@@ -295,9 +360,16 @@ export default function Page() {
           <h1>Market Fuzion — Prospecting Command Center</h1>
           <p>Research and prepare leads. You approve. You send. Nothing auto-contacts anyone.</p>
         </div>
-        <button className="theme-btn" onClick={toggleTheme} aria-label="Toggle color theme">
-          {theme === "dark" ? "☀︎ Light" : "☾ Dark"}
-        </button>
+        <div className="top-actions">
+          {user && (
+            <div className="user-chip">
+              {user.photoURL ? <img src={user.photoURL} alt="" /> : <span className="avatar-fallback">{(user.email || "?")[0].toUpperCase()}</span>}
+              <span className="user-email">{user.email}</span>
+              <button className="linklike" onClick={signOutUser}>Sign out</button>
+            </div>
+          )}
+          <ThemeButton theme={theme} onToggle={toggleTheme} />
+        </div>
       </div>
 
       <div className="panel">
@@ -370,7 +442,9 @@ export default function Page() {
               );
             })}
           </div>
-          <div className="filters-help">Statuses and favorites are saved in this browser only.</div>
+          <div className="filters-help">
+            {user ? "Saved to your account — favorites, status, and notes follow you across devices." : "Statuses and favorites are saved in this browser only."}
+          </div>
 
           <div className="table-scroll">
             <table>
@@ -390,16 +464,9 @@ export default function Page() {
                 ) : (
                   shown.map(({ l, i }) => (
                     <FragmentRow
-                      key={i}
-                      lead={l}
-                      index={i}
-                      open={openRow === i}
-                      flash={flashId === i}
+                      key={i} lead={l} index={i} open={openRow === i} flash={flashId === i}
                       onToggle={() => setOpenRow(openRow === i ? null : i)}
-                      onApprove={approveLead}
-                      onStatus={setStatus}
-                      onFavorite={toggleFavorite}
-                      onNotes={setNotes}
+                      onApprove={approveLead} onStatus={setStatus} onFavorite={toggleFavorite} onNotes={setNotes}
                     />
                   ))
                 )}
@@ -408,6 +475,8 @@ export default function Page() {
           </div>
         </>
       )}
+
+      {toast && <div className={`toast ${toast.kind}`}>{toast.msg}</div>}
     </div>
   );
 }
@@ -417,10 +486,7 @@ function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus, 
   const slug = statusSlug(lead["Status"]);
   return (
     <>
-      <tr
-        className={`lead-row status-${slug}${open ? " is-open" : ""}${approved ? " row-approved" : ""}${flash ? " flash" : ""}`}
-        onClick={onToggle}
-      >
+      <tr className={`lead-row status-${slug}${open ? " is-open" : ""}${approved ? " row-approved" : ""}${flash ? " flash" : ""}`} onClick={onToggle}>
         <td>
           <div className="biz-cell">
             <div className="biz-line">
@@ -444,10 +510,7 @@ function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus, 
       {open && (
         <tr className="detail">
           <td colSpan={6}>
-            <EvidenceDrawer
-              lead={lead} index={index}
-              onApprove={onApprove} onStatus={onStatus} onFavorite={onFavorite} onNotes={onNotes}
-            />
+            <EvidenceDrawer lead={lead} index={index} onApprove={onApprove} onStatus={onStatus} onFavorite={onFavorite} onNotes={onNotes} />
           </td>
         </tr>
       )}
@@ -534,14 +597,6 @@ function Draft({ title, text }) {
 }
 
 function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes }) {
-  const [savedMsg, setSavedMsg] = useState(false);
-  useEffect(() => {
-    if (!savedMsg) return;
-    const t = setTimeout(() => setSavedMsg(false), 1600);
-    return () => clearTimeout(t);
-  }, [savedMsg]);
-  const flash = () => setSavedMsg(true);
-
   const website = lead["Website"];
   const approved = lead["Approved To Contact"] === "YES";
   const opp = lead.opportunity;
@@ -565,7 +620,7 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
           <ScoreRing score={lead["Fit Score"]} size={72} showLabel />
           <div className="lh-id">
             <div className="lh-name-row">
-              <StarButton on={lead.favorite} onClick={() => { onFavorite(index); flash(); }} />
+              <StarButton on={lead.favorite} onClick={() => onFavorite(index)} />
               <span className="lh-name">{lead["Business Name"]}</span>
             </div>
             <div className="lh-stats">
@@ -575,23 +630,18 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
             </div>
           </div>
           <div className="spacer" />
-          <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => { onApprove(index); flash(); }} disabled={approved}>
+          <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => onApprove(index)} disabled={approved}>
             {approved ? "✓ Approved" : "Approve Lead"}
           </button>
         </div>
         <div className="lh-move">Best First Move: <strong>{bestFirstMove(lead)}</strong></div>
         <div className="status-actions">
-          <button className="secondary sm" onClick={() => { onStatus(index, "Contacted"); flash(); }}>Mark Contacted</button>
-          <button className="secondary sm" onClick={() => { onStatus(index, "Follow-Up Needed"); flash(); }}>Follow-Up Needed</button>
-          <button className="secondary sm" onClick={() => { onStatus(index, "Booked Call"); flash(); }}>Booked Call</button>
-          <button className="secondary sm" onClick={() => { onStatus(index, "Not a Fit"); flash(); }}>Not a Fit</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Contacted")}>Mark Contacted</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Follow-Up Needed")}>Follow-Up Needed</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Booked Call")}>Booked Call</button>
+          <button className="secondary sm" onClick={() => onStatus(index, "Not a Fit")}>Not a Fit</button>
         </div>
-        {savedMsg && <div className="saved-msg">Saved in this browser.</div>}
         {approved && <div className="approve-help">✓ Now in your Ready to Contact queue.</div>}
-        <textarea
-          className="notes" placeholder="Your notes (saved in this browser)…"
-          value={lead.notes || ""} onChange={(e) => { onNotes(index, e.target.value); flash(); }}
-        />
       </section>
 
       {/* B. What matters */}
@@ -605,9 +655,9 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
         </div>
       </section>
 
-      {/* C. Verified Info */}
+      {/* C. Verified info */}
       <section className="sec">
-        <div className="sec-head"><h4>Verified Info</h4><Badge kind="verified">Public data</Badge></div>
+        <div className="sec-head"><h4>Verified info</h4><Badge kind="verified">Public data</Badge></div>
         <div className="facts">
           <div className="fact"><span>Website</span>{website ? <a href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a> : "—"}</div>
           <div className="fact"><span>Phone</span>{lead["Phone"] || "—"}</div>
@@ -617,10 +667,10 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
         </div>
       </section>
 
-      {/* D. Social Profiles */}
+      {/* D. Social profiles */}
       <section className="sec">
         <div className="sec-head">
-          <h4>Social Profiles</h4>
+          <h4>Social profiles</h4>
           {mains.length ? <Badge kind="verified">Match found</Badge> : <Badge kind="review">Review needed</Badge>}
         </div>
         {mains.length
@@ -629,9 +679,9 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
         {supporting.length > 0 && <SupportingEvidence items={supporting} />}
       </section>
 
-      {/* E. Suggested Outreach */}
+      {/* E. Suggested outreach */}
       <section className="sec">
-        <div className="sec-head"><h4>Suggested Outreach</h4><Badge kind="review">Human review</Badge></div>
+        <div className="sec-head"><h4>Suggested outreach</h4><Badge kind="review">Human review</Badge></div>
         <div className="field-line"><span className="k">Recommended channel: </span>{bestFirstMove(lead)}</div>
         <div className="move-why">{bestMoveReason(lead)}</div>
         <Draft title="First Message" text={lead["First Message"]} />
@@ -641,7 +691,16 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
         <div className="ai-note">AI-generated suggestions. Review and edit before any manual outreach — nothing is sent automatically.</div>
       </section>
 
-      {/* F. Score Details (collapsed) */}
+      {/* F. Private notes */}
+      <section className="sec">
+        <div className="sec-head"><h4>Private notes</h4></div>
+        <textarea
+          className="notes" placeholder="Private notes (only you can see these)…"
+          defaultValue={lead.notes || ""} onChange={(e) => onNotes(index, e.target.value)}
+        />
+      </section>
+
+      {/* G. Score details (collapsed) */}
       <ScoreDetails lead={lead} />
     </div>
   );
