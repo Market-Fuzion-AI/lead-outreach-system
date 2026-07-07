@@ -622,7 +622,7 @@ function SupportingEvidence({ items }) {
   return (
     <div className="supporting">
       <button className="collapse-toggle" onClick={() => setOpen((o) => !o)}>
-        {open ? "Hide" : "Show"} supporting evidence ({items.length})
+        {open ? "Hide" : "Show"} related social links ({items.length})
       </button>
       {open && (
         <div className="supporting-list">
@@ -722,14 +722,13 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
           </div>
           <div className="spacer" />
           <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => onApprove(index)} disabled={approved}>
-            {approved ? "✓ Approved" : "Approve Lead"}
+            {approved ? "✓ In Ready to Contact" : "Move to Ready to Contact"}
           </button>
         </div>
         <div className="lh-move">Best First Move: <strong>{bestFirstMove(lead)}</strong></div>
         {approved && <div className="approve-help">✓ Now in your Ready to Contact queue.</div>}
         <div className="facts overview-facts">
           <div className="fact"><span>Phone</span>{lead["Phone"] || "—"}</div>
-          <div className="fact"><span>Website</span>{website ? <a href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a> : "—"}</div>
           <div className="fact"><span>Location</span>{lead["Location"] || "—"}</div>
           <div className="fact"><span>Rating</span>{lead.rating !== "" && lead.rating != null ? `${lead.rating}★${lead.reviews !== "" && lead.reviews != null ? ` · ${lead.reviews} reviews` : ""}` : "—"}</div>
           <div className="fact"><span>Category</span>{lead.category || "—"}</div>
@@ -742,9 +741,16 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
           <h4>Online Presence</h4>
           {mains.length ? <Badge kind="verified">Verified match</Badge> : <Badge kind="review">Review needed</Badge>}
         </div>
-        <div className="actions">
-          {website && <a className="btn-link" href={extUrl(website)} target="_blank" rel="noreferrer">Open Website</a>}
-        </div>
+        {website && (
+          <div className="pmatch">
+            <div className="pmatch-top">
+              <span className="pmatch-plat">Website</span>
+              <Badge kind="verified">Verified</Badge>
+              <a className="btn-link sm" href={extUrl(website)} target="_blank" rel="noreferrer">Open</a>
+            </div>
+            <a className="pmatch-url" href={extUrl(website)} target="_blank" rel="noreferrer">{hostOf(website)}</a>
+          </div>
+        )}
         {mains.length
           ? mains.map((m, i) => <MainMatch key={i} platform={m.platform} c={m.c} />)
           : <div className="ev-none">No verified business profile or page matched yet.</div>}
