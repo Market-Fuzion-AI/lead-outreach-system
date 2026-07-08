@@ -25,7 +25,9 @@ const PRIMARY_FILTERS = [
 // Lead-quality filters live in a compact secondary dropdown.
 const QUALITY_FILTERS = ["Hot Leads", "Warm Leads", "Cold Leads", "High Trust", "Needs Social Review"];
 
-const WORKFLOW = ["Search", "Review", "Approve", "Contact", "Export"];
+// Stage-based navigation tabs (shell only for now; Ready to Contact / Pipeline /
+// Archive load saved leads in a later step).
+const TABS = ["Research", "Review", "Ready to Contact", "Pipeline", "Archive"];
 const STORAGE_KEY = "mf-workflow-v1";
 
 const extUrl = (u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
@@ -289,6 +291,7 @@ export default function Page() {
   const [openRow, setOpenRow] = useState(null);
   const [filter, setFilter] = useState("All");
   const [quality, setQuality] = useState("");
+  const [tab, setTab] = useState("Research");
   const [flashId, setFlashId] = useState(null);
   const [theme, setTheme] = useState("light");
   const [user, setUser] = useState(null);
@@ -428,6 +431,64 @@ export default function Page() {
 
   const shown = leads.map((l, i) => ({ l, i })).filter(({ l }) => matchesFilter(l, filter, quality));
 
+  // Researched-leads results (filters + table). Shown under Research and Review.
+  const resultsSection = (
+    <>
+      {meta && (
+        <div className="meta">
+          Found {meta.found} · removed {meta.removedFranchises} franchise{meta.removedFranchises === 1 ? "" : "s"} · analyzed {meta.analyzed}. Click a lead to review, approve, and copy outreach.
+        </div>
+      )}
+
+      <div className="filters">
+        {PRIMARY_FILTERS.map((f) => {
+          const count = leads.filter((l) => matchesFilter(l, f, quality)).length;
+          return (
+            <button key={f} className={`chip${filter === f ? " active" : ""}`} onClick={() => setFilter(f)}>
+              {f} <span className="chip-count">{count}</span>
+            </button>
+          );
+        })}
+        <div className="filters-spacer" />
+        <select className="quality-select" value={quality} onChange={(e) => setQuality(e.target.value)} aria-label="Lead quality filter">
+          <option value="">All quality</option>
+          {QUALITY_FILTERS.map((q) => <option key={q} value={q}>{q}</option>)}
+        </select>
+      </div>
+      <div className="filters-help">
+        {user ? "Saved to your account — favorites, status, and notes follow you across devices." : "Statuses and favorites are saved in this browser only."}
+      </div>
+
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Lead</th>
+              <th>Contact</th>
+              <th>Lead Score</th>
+              <th>Best First Move</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.length === 0 ? (
+              <tr><td colSpan={6} className="empty-cell">No leads match “{filter}”.</td></tr>
+            ) : (
+              shown.map(({ l, i }) => (
+                <FragmentRow
+                  key={i} lead={l} index={i} open={openRow === i} flash={flashId === i}
+                  onToggle={() => setOpenRow(openRow === i ? null : i)}
+                  onApprove={approveLead} onStatus={setStatus} onFavorite={toggleFavorite} onNotes={setNotes}
+                />
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+
   return (
     <div className="wrap">
       <GradientDefs />
@@ -448,113 +509,74 @@ export default function Page() {
         </div>
       </div>
 
-      <div className="panel">
-        <div className="form-grid">
-          <div className="field">
-            <label>Business Category / Niche</label>
-            <select value={form.categoryPreset} onChange={(e) => set("categoryPreset", e.target.value)}>
-              {PRESETS.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-          {form.categoryPreset === "Custom" && (
-            <div className="field">
-              <label>Custom Category</label>
-              <input value={form.customCategory} onChange={(e) => set("customCategory", e.target.value)} placeholder="e.g. Pet Grooming" />
-            </div>
-          )}
-          <div className="field full">
-            <label>Specific Keywords (comma-separated)</label>
-            <input value={form.keywords} onChange={(e) => set("keywords", e.target.value)} placeholder="yoga studio, pilates, personal training" />
-            <div className="helper">Use Category for broad market, Keywords for specific business type. Example — Category: Fitness · Keywords: yoga studio, pilates, personal training.</div>
-          </div>
-          <div className="field">
-            <label>Location</label>
-            <input value={form.location} onChange={(e) => set("location", e.target.value)} placeholder="Fairfax, VA" />
-          </div>
-          <div className="field">
-            <label>Max Results (1–40)</label>
-            <input type="number" min="1" max="40" value={form.maxResults} onChange={(e) => set("maxResults", e.target.value)} />
-          </div>
-          <div className="field full">
-            <label>Excluded Franchises (comma-separated)</label>
-            <input value={form.excludedFranchises} onChange={(e) => set("excludedFranchises", e.target.value)} />
-          </div>
-        </div>
-        <div className="row">
-          <button onClick={runSearch} disabled={loading}>
-            {loading ? <><span className="spinner" />Researching…</> : "Research Leads"}
-          </button>
-          <button className="secondary" onClick={exportCSV} disabled={!leads.length}>
-            Export CSV ({leads.length})
-          </button>
-        </div>
-        {error && <div className="error">⚠ {error}</div>}
-      </div>
+      <nav className="tabs">
+        {TABS.map((t) => (
+          <button key={t} className={`tab${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>{t}</button>
+        ))}
+      </nav>
 
-      {leads.length > 0 && (
+      {tab === "Research" && (
         <>
-          <div className="workflow">
-            {WORKFLOW.map((step, i) => (
-              <span key={step} className="wf-step">
-                <span className="wf-dot">{i + 1}</span>{step}
-                {i < WORKFLOW.length - 1 && <span className="wf-arrow">→</span>}
-              </span>
-            ))}
-          </div>
-
-          {meta && (
-            <div className="meta">
-              Found {meta.found} · removed {meta.removedFranchises} franchise{meta.removedFranchises === 1 ? "" : "s"} · analyzed {meta.analyzed}. Click a lead to review, approve, and copy outreach.
+          <div className="panel">
+            <div className="form-grid">
+              <div className="field">
+                <label>Business Category / Niche</label>
+                <select value={form.categoryPreset} onChange={(e) => set("categoryPreset", e.target.value)}>
+                  {PRESETS.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+              {form.categoryPreset === "Custom" && (
+                <div className="field">
+                  <label>Custom Category</label>
+                  <input value={form.customCategory} onChange={(e) => set("customCategory", e.target.value)} placeholder="e.g. Pet Grooming" />
+                </div>
+              )}
+              <div className="field full">
+                <label>Specific Keywords (comma-separated)</label>
+                <input value={form.keywords} onChange={(e) => set("keywords", e.target.value)} placeholder="yoga studio, pilates, personal training" />
+                <div className="helper">Use Category for broad market, Keywords for specific business type. Example — Category: Fitness · Keywords: yoga studio, pilates, personal training.</div>
+              </div>
+              <div className="field">
+                <label>Location</label>
+                <input value={form.location} onChange={(e) => set("location", e.target.value)} placeholder="Fairfax, VA" />
+              </div>
+              <div className="field">
+                <label>Max Results (1–40)</label>
+                <input type="number" min="1" max="40" value={form.maxResults} onChange={(e) => set("maxResults", e.target.value)} />
+              </div>
+              <div className="field full">
+                <label>Excluded Franchises (comma-separated)</label>
+                <input value={form.excludedFranchises} onChange={(e) => set("excludedFranchises", e.target.value)} />
+              </div>
             </div>
-          )}
-
-          <div className="filters">
-            {PRIMARY_FILTERS.map((f) => {
-              const count = leads.filter((l) => matchesFilter(l, f, quality)).length;
-              return (
-                <button key={f} className={`chip${filter === f ? " active" : ""}`} onClick={() => setFilter(f)}>
-                  {f} <span className="chip-count">{count}</span>
-                </button>
-              );
-            })}
-            <div className="filters-spacer" />
-            <select className="quality-select" value={quality} onChange={(e) => setQuality(e.target.value)} aria-label="Lead quality filter">
-              <option value="">All quality</option>
-              {QUALITY_FILTERS.map((q) => <option key={q} value={q}>{q}</option>)}
-            </select>
+            <div className="row">
+              <button onClick={runSearch} disabled={loading}>
+                {loading ? <><span className="spinner" />Researching…</> : "Research Leads"}
+              </button>
+              <button className="secondary" onClick={exportCSV} disabled={!leads.length}>
+                Export CSV ({leads.length})
+              </button>
+            </div>
+            {error && <div className="error">⚠ {error}</div>}
           </div>
-          <div className="filters-help">
-            {user ? "Saved to your account — favorites, status, and notes follow you across devices." : "Statuses and favorites are saved in this browser only."}
-          </div>
-
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Lead</th>
-                  <th>Contact</th>
-                  <th>Lead Score</th>
-                  <th>Best First Move</th>
-                  <th>Status</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.length === 0 ? (
-                  <tr><td colSpan={6} className="empty-cell">No leads match “{filter}”.</td></tr>
-                ) : (
-                  shown.map(({ l, i }) => (
-                    <FragmentRow
-                      key={i} lead={l} index={i} open={openRow === i} flash={flashId === i}
-                      onToggle={() => setOpenRow(openRow === i ? null : i)}
-                      onApprove={approveLead} onStatus={setStatus} onFavorite={toggleFavorite} onNotes={setNotes}
-                    />
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+          {leads.length > 0 && resultsSection}
         </>
+      )}
+
+      {tab === "Review" && (
+        leads.length > 0
+          ? resultsSection
+          : <div className="tab-empty">Run a search first to review leads.</div>
+      )}
+
+      {tab === "Ready to Contact" && (
+        <div className="tab-empty">Ready to Contact queue will show approved leads here.</div>
+      )}
+      {tab === "Pipeline" && (
+        <div className="tab-empty">Pipeline will show contacted leads, follow-ups, booked calls, proposals, and won deals.</div>
+      )}
+      {tab === "Archive" && (
+        <div className="tab-empty">Archive will show not-fit, duplicate, no-response, and do-not-contact leads.</div>
       )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.msg}</div>}
