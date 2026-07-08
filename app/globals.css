@@ -639,3 +639,43 @@ tr.lead-row.status-approved td:first-child { box-shadow: inset 3px 0 0 var(--acc
 .checklist-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
 .check-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; cursor: pointer; }
 .check-item input[type="checkbox"] { width: 16px; height: 16px; padding: 0; margin: 0; accent-color: var(--accent); flex-shrink: 0; }
+
+/* ================================================================== *
+ * v10 — command-center polish (icons, header, card accents, hover)
+ * ================================================================== */
+
+/* Header: title badge + workflow context strip */
+.brand-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cc-badge { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--accent); background: var(--accent-weak); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+.flow-context { display: flex; flex-wrap: wrap; align-items: center; margin-top: 10px; font-size: 11.5px; color: var(--muted); }
+.fc-item { display: inline-flex; align-items: center; }
+.fc-arrow { margin: 0 6px; opacity: 0.5; }
+.fc-on { color: var(--text); font-weight: 700; }
+
+/* Tab icons */
+.tab { display: inline-flex; align-items: center; gap: 6px; }
+.tab-ic { font-size: 13px; line-height: 1; }
+
+/* Card top accents (inset line, no border conflicts) + hover lift */
+.saved-card, .triage-card {
+  box-shadow: inset 0 3px 0 var(--accent-top, var(--border-strong)), var(--shadow);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.saved-card:hover, .triage-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: inset 0 3px 0 var(--accent-top, var(--border-strong)), 0 10px 26px rgba(16,24,40,0.12);
+}
+
+/* Clickable lead rows should feel clickable */
+tr.lead-row { cursor: pointer; }
+
+/* Stage section headers + column hints */
+.stage-header { display: flex; align-items: center; gap: 12px; margin: 4px 2px 16px; }
+.stage-emoji { font-size: 22px; line-height: 1; }
+.stage-h-title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.stage-h-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
+.stage-col-hint { font-size: 11.5px; color: var(--muted); margin: -6px 0 10px; line-height: 1.4; }
+
+/* Intentional empty states */
+.tab-empty { line-height: 1.6; }
+.tab-empty-ic { font-size: 26px; margin-bottom: 10px; opacity: 0.85; }

@@ -29,6 +29,17 @@ const QUALITY_FILTERS = ["Hot Leads", "Warm Leads", "Cold Leads", "High Trust", 
 // Stage-based navigation tabs (shell only for now; Ready to Contact / Pipeline /
 // Archive load saved leads in a later step).
 const TABS = ["Research", "Review", "Contact", "Follow-Up", "Deals", "Archive"];
+const TAB_ICONS = {
+  "Research": "🔎", "Review": "✅", "Contact": "💬",
+  "Follow-Up": "🔁", "Deals": "🤝", "Archive": "🗄️",
+};
+// Short helper copy shown under each stage tab heading.
+const TAB_BLURB = {
+  "Contact": "Your outreach workspace. Reach out manually — nothing is sent automatically.",
+  "Follow-Up": "Nurture leads through the sequence so inquiries don't slip through.",
+  "Deals": "Discovery calls, proposals, and delivery. Wired after the outreach MVP.",
+  "Archive": "Leads parked out of the active workflow. Nothing here needs action.",
+};
 
 // Funnel Audit Checklist groups — front-end prototype only (not persisted yet).
 const FUNNEL_CHECKLIST = [
@@ -90,6 +101,21 @@ const STATUS_SLUG = {
   "Duplicate": "duplicate", "Wrong Match": "wrongmatch", "Do Not Contact": "donotcontact",
 };
 const statusSlug = (s) => STATUS_SLUG[s] || "new";
+
+// Accent colors (CSS var strings) for card top-borders — visual only.
+function bandAccent(score) {
+  const b = scoreBand(score);
+  return b === "hot" ? "var(--hot)" : b === "warm" ? "var(--social)" : "var(--accent)";
+}
+function statusAccent(status) {
+  const slug = statusSlug(status);
+  if (["ready", "contacted", "approved", "reviewing"].includes(slug)) return "var(--accent)";
+  if (slug === "followup") return "var(--social)";
+  if (slug === "proposal") return "var(--ai)";
+  if (["booked", "won", "delivery", "delivered"].includes(slug)) return "var(--verified)";
+  if (["notfit", "donotcontact"].includes(slug)) return "var(--review)";
+  return "var(--border-strong)";
+}
 
 function matchesPrimary(lead, f) {
   switch (f) {
@@ -535,8 +561,19 @@ export default function Page() {
       <GradientDefs />
       <div className="topbar">
         <div className="brand">
-          <h1>Market Fuzion — Prospecting Command Center</h1>
+          <div className="brand-line">
+            <h1>Market Fuzion — Prospecting Command Center</h1>
+            <span className="cc-badge">Sales Pipeline</span>
+          </div>
           <p>Research and prepare leads. You approve. You send. Nothing auto-contacts anyone.</p>
+          <div className="flow-context">
+            {TABS.map((t, i) => (
+              <span key={t} className="fc-item">
+                <span className={tab === t ? "fc-on" : ""}>{TAB_ICONS[t]} {t}</span>
+                {i < TABS.length - 1 && <span className="fc-arrow">→</span>}
+              </span>
+            ))}
+          </div>
         </div>
         <div className="top-actions">
           {user && (
@@ -552,7 +589,9 @@ export default function Page() {
 
       <nav className="tabs">
         {TABS.map((t) => (
-          <button key={t} className={`tab${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>{t}</button>
+          <button key={t} className={`tab${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>
+            <span className="tab-ic">{TAB_ICONS[t]}</span>{t}
+          </button>
         ))}
       </nav>
 
@@ -613,7 +652,7 @@ export default function Page() {
 
       {tab === "Review" && (
         reviewEmpty
-          ? <div className="tab-empty">No leads saved for review yet. Star leads from Research to review them here.</div>
+          ? <div className="tab-empty"><div className="tab-empty-ic">✅</div>No leads saved for review yet.<br />Star leads from Research to review them here.</div>
           : (
             <>
               {reviewLive.length > 0 && leadTable(reviewLive, "No favorited leads.")}
@@ -628,19 +667,20 @@ export default function Page() {
 
       {tab === "Follow-Up" && (
         <StageBoard
-          note="Nurture queue. Suggested timing: Day 0 first contact · Day 1–2 follow-up 1 · Day 4–5 follow-up 2 · Day 7–10 close-the-loop."
+          icon="🔁" title="Follow-Up" subtitle={TAB_BLURB["Follow-Up"]}
+          note="Suggested timing: Day 0 first contact · Day 1–2 follow-up 1 · Day 4–5 follow-up 2 · Day 7–10 close-the-loop."
           columns={[
-            { title: "Waiting for reply", empty: "No leads waiting yet." },
-            { title: "Follow-up due", docs: pipelineDocs, empty: "No follow-ups due." },
-            { title: "Maybe later", empty: "Nothing here yet." },
-            { title: "No response after sequence", empty: "Nothing here yet." },
+            { title: "Waiting for reply", hint: "Sent, awaiting a response.", empty: "No leads waiting yet." },
+            { title: "Follow-up due", hint: "Time for the next nudge.", docs: pipelineDocs, empty: "No follow-ups due." },
+            { title: "Maybe later", hint: "Interested but not now.", empty: "Nothing here yet." },
+            { title: "No response after sequence", hint: "Sequence finished, no reply.", empty: "Nothing here yet." },
           ]}
         />
       )}
 
       {tab === "Deals" && (
         <StageBoard
-          note="Deals and delivery tracking will be wired after the outreach MVP."
+          icon="🤝" title="Deals" subtitle={TAB_BLURB["Deals"]}
           columns={[
             { title: "Discovery Call", empty: "Nothing here yet." },
             { title: "Proposal / Upwork Offer Sent", empty: "Nothing here yet." },
@@ -654,6 +694,7 @@ export default function Page() {
 
       {tab === "Archive" && (
         <StageBoard
+          icon="🗄️" title="Archive" subtitle={TAB_BLURB["Archive"]}
           columns={[
             { title: "Not a Fit", docs: byStatus("Not a Fit"), empty: "None." },
             { title: "Not Interested", docs: byStatus("Not Interested"), empty: "None." },
@@ -684,7 +725,7 @@ function SavedLeadCard({ doc }) {
   const slug = statusSlug(doc.status);
   const notes = String(doc.notes || "").trim();
   return (
-    <div className="saved-card">
+    <div className="saved-card" style={{ "--accent-top": statusAccent(doc.status) }}>
       <div className="saved-head">
         <ScoreRing score={Number(doc.fitScore) || 0} />
         <div className="saved-id">
@@ -712,9 +753,9 @@ function SavedList({ docs, empty }) {
 function TriageCard({ lead, index, onFavorite }) {
   const fav = lead.favorite;
   return (
-    <div className={`triage-card${fav ? " saved" : ""}`}>
+    <div className={`triage-card${fav ? " saved" : ""}`} style={{ "--accent-top": bandAccent(lead["Fit Score"]) }}>
       <div className="triage-top">
-        <ScoreRing score={lead["Fit Score"]} />
+        <ScoreRing score={lead["Fit Score"]} showLabel />
         <div className="triage-id">
           <div className="triage-name">{lead["Business Name"]}</div>
           <span className={`status-pill ${statusSlug(lead["Status"])}`}>{lead["Status"]}</span>
@@ -740,10 +781,24 @@ function TriageCard({ lead, index, onFavorite }) {
   );
 }
 
+// Section heading with icon + helper copy, shared by the stage tabs.
+function StageHeader({ icon, title, subtitle }) {
+  return (
+    <div className="stage-header">
+      <span className="stage-emoji" aria-hidden="true">{icon}</span>
+      <div>
+        <div className="stage-h-title">{title}</div>
+        {subtitle && <div className="stage-h-sub">{subtitle}</div>}
+      </div>
+    </div>
+  );
+}
+
 // Reusable column board for the Follow-Up / Deals / Archive placeholder stages.
-function StageBoard({ columns, note }) {
+function StageBoard({ icon, title, subtitle, columns, note }) {
   return (
     <div className="stage-wrap">
+      {title && <StageHeader icon={icon} title={title} subtitle={subtitle} />}
       {note && <div className="stage-note">{note}</div>}
       <div className="stage-board">
         {columns.map((col) => (
@@ -752,6 +807,7 @@ function StageBoard({ columns, note }) {
               {col.title}
               {col.docs && col.docs.length ? <span className="stage-count">{col.docs.length}</span> : null}
             </div>
+            {col.hint && <div className="stage-col-hint">{col.hint}</div>}
             <div className="stage-col-body">
               {col.docs && col.docs.length
                 ? col.docs.map((d) => <SavedLeadCard key={d.id} doc={d} />)
@@ -769,7 +825,7 @@ function StageBoard({ columns, note }) {
 function ContactWorkspace({ docs }) {
   return (
     <div className="stage-wrap">
-      <div className="stage-note">Outreach workspace. Pick a lead from the queue, then reach out manually. Nothing is sent automatically.</div>
+      <StageHeader icon="💬" title="Contact" subtitle="Your outreach workspace. Reach out manually — nothing is sent automatically." />
       <div className="contact-layout">
         <div className="contact-queue">
           <div className="stage-col-head">Contact queue<span className="stage-count">{docs.length}</span></div>
