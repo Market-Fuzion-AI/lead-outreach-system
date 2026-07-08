@@ -28,7 +28,15 @@ const QUALITY_FILTERS = ["Hot Leads", "Warm Leads", "Cold Leads", "High Trust", 
 
 // Stage-based navigation tabs (shell only for now; Ready to Contact / Pipeline /
 // Archive load saved leads in a later step).
-const TABS = ["Research", "Review", "Ready to Contact", "Pipeline", "Archive"];
+const TABS = ["Research", "Review", "Contact", "Follow-Up", "Deals", "Archive"];
+
+// Funnel Audit Checklist groups — front-end prototype only (not persisted yet).
+const FUNNEL_CHECKLIST = [
+  { group: "Public Presence", items: ["Website found", "Google Business Profile found", "Instagram found", "Facebook found", "LinkedIn found"] },
+  { group: "Funnel Assets", items: ["Landing page found", "Lead magnet found", "Booking link found", "Contact form found", "Email opt-in found"] },
+  { group: "Automation Signals", items: ["DM automation detected", "Instant reply detected", "Email follow-up detected", "SMS follow-up detected", "CRM / booking system detected"] },
+  { group: "Opportunity", items: ["Clear follow-up gap", "Personalized hook found", "Decision-maker / contact path found", "Suggested offer angle identified"] },
+];
 const STORAGE_KEY = "mf-workflow-v1";
 
 const extUrl = (u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
@@ -400,7 +408,7 @@ export default function Page() {
     const lead = leads[index]; if (!lead) return;
     const fav = !lead.favorite;
     setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, favorite: fav, _saved: true } : l)));
-    commitSaved(lead, { favorite: fav });
+    commitSaved(lead, { favorite: fav }).then(refreshSavedDocs);
   }
   function approveLead(index) {
     const lead = leads[index]; if (!lead) return;
@@ -443,17 +451,46 @@ export default function Page() {
 
   const shown = leads.map((l, i) => ({ l, i })).filter(({ l }) => matchesFilter(l, filter, quality));
 
-  // Saved leads grouped into stage tabs (by stored status). Unknown statuses map
-  // to Review via getStageForStatus, so they simply don't appear in these three
-  // tabs rather than disappearing/erroring.
+  // Saved leads grouped for the stage tabs (by stored status). Unknown statuses
+  // map to Review via getStageForStatus, so they don't vanish or error — they
+  // just don't appear in these tabs. The tab labels are UI; the underlying stage
+  // mapping in lib/stages.js is unchanged.
+  const byStatus = (s) => savedLeadDocs.filter((d) => d.status === s);
   const readyDocs = savedLeadDocs.filter((d) => getStageForStatus(d.status) === "Ready to Contact");
-  const pipelineDocs = savedLeadDocs.filter((d) => {
-    const st = getStageForStatus(d.status);
-    return st === "Pipeline" || st === "Client / Delivery";
-  });
-  const archiveDocs = savedLeadDocs.filter((d) => getStageForStatus(d.status) === "Archive");
+  const pipelineDocs = savedLeadDocs.filter((d) => getStageForStatus(d.status) === "Pipeline");
 
-  // Researched-leads results (filters + table). Shown under Research and Review.
+  // Shared lead table (rows = [{ l, i }]). Reused by Research results and Review.
+  const leadTable = (rows, emptyMsg) => (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Lead</th>
+            <th>Contact</th>
+            <th>Lead Score</th>
+            <th>Best First Move</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr><td colSpan={6} className="empty-cell">{emptyMsg}</td></tr>
+          ) : (
+            rows.map(({ l, i }) => (
+              <FragmentRow
+                key={i} lead={l} index={i} open={openRow === i} flash={flashId === i}
+                onToggle={() => setOpenRow(openRow === i ? null : i)}
+                onApprove={approveLead} onStatus={setStatus} onFavorite={toggleFavorite} onNotes={setNotes}
+              />
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  // Research results (filters + table over the current search).
   const resultsSection = (
     <>
       {meta && (
@@ -481,35 +518,17 @@ export default function Page() {
         {user ? "Saved to your account — favorites, status, and notes follow you across devices." : "Statuses and favorites are saved in this browser only."}
       </div>
 
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Lead</th>
-              <th>Contact</th>
-              <th>Lead Score</th>
-              <th>Best First Move</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.length === 0 ? (
-              <tr><td colSpan={6} className="empty-cell">No leads match “{filter}”.</td></tr>
-            ) : (
-              shown.map(({ l, i }) => (
-                <FragmentRow
-                  key={i} lead={l} index={i} open={openRow === i} flash={flashId === i}
-                  onToggle={() => setOpenRow(openRow === i ? null : i)}
-                  onApprove={approveLead} onStatus={setStatus} onFavorite={toggleFavorite} onNotes={setNotes}
-                />
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      {leadTable(shown, `No leads match “${filter}”.`)}
     </>
   );
+
+  // Review queue = favorited leads only. Prefer live (interactive) rows; add
+  // favorited saved docs not in the current search so review leads persist after
+  // refresh/login. Deduped by leadKey.
+  const reviewLive = leads.map((l, i) => ({ l, i })).filter(({ l }) => l.favorite);
+  const liveKeys = new Set(reviewLive.map(({ l }) => l._key));
+  const reviewSaved = savedLeadDocs.filter((d) => d.favorite && !liveKeys.has(d.id));
+  const reviewEmpty = reviewLive.length === 0 && reviewSaved.length === 0;
 
   return (
     <div className="wrap">
@@ -581,24 +600,70 @@ export default function Page() {
             </div>
             {error && <div className="error">⚠ {error}</div>}
           </div>
-          {leads.length > 0 && resultsSection}
+          {leads.length > 0 && (
+            <>
+              <div className="triage-help">Quick triage. Star a lead to save it for Review, where you open the full profile.</div>
+              <div className="triage-grid">
+                {leads.map((l, i) => <TriageCard key={i} lead={l} index={i} onFavorite={toggleFavorite} />)}
+              </div>
+            </>
+          )}
         </>
       )}
 
       {tab === "Review" && (
-        leads.length > 0
-          ? resultsSection
-          : <div className="tab-empty">Run a search first to review leads.</div>
+        reviewEmpty
+          ? <div className="tab-empty">No leads saved for review yet. Star leads from Research to review them here.</div>
+          : (
+            <>
+              {reviewLive.length > 0 && leadTable(reviewLive, "No favorited leads.")}
+              {reviewSaved.length > 0 && (
+                <div className="saved-list">{reviewSaved.map((d) => <SavedLeadCard key={d.id} doc={d} />)}</div>
+              )}
+            </>
+          )
       )}
 
-      {tab === "Ready to Contact" && (
-        <SavedList docs={readyDocs} empty="No leads ready to contact yet. Move a reviewed lead here first." />
+      {tab === "Contact" && <ContactWorkspace docs={readyDocs} />}
+
+      {tab === "Follow-Up" && (
+        <StageBoard
+          note="Nurture queue. Suggested timing: Day 0 first contact · Day 1–2 follow-up 1 · Day 4–5 follow-up 2 · Day 7–10 close-the-loop."
+          columns={[
+            { title: "Waiting for reply", empty: "No leads waiting yet." },
+            { title: "Follow-up due", docs: pipelineDocs, empty: "No follow-ups due." },
+            { title: "Maybe later", empty: "Nothing here yet." },
+            { title: "No response after sequence", empty: "Nothing here yet." },
+          ]}
+        />
       )}
-      {tab === "Pipeline" && (
-        <SavedList docs={pipelineDocs} empty="No active pipeline leads yet." />
+
+      {tab === "Deals" && (
+        <StageBoard
+          note="Deals and delivery tracking will be wired after the outreach MVP."
+          columns={[
+            { title: "Discovery Call", empty: "Nothing here yet." },
+            { title: "Proposal / Upwork Offer Sent", empty: "Nothing here yet." },
+            { title: "Won", docs: byStatus("Won"), empty: "No won deals yet." },
+            { title: "Work in Progress", docs: byStatus("In Delivery"), empty: "Nothing in delivery." },
+            { title: "Delivered", docs: byStatus("Delivered"), empty: "Nothing delivered yet." },
+            { title: "Testimonial / Referral", empty: "Nothing here yet." },
+          ]}
+        />
       )}
+
       {tab === "Archive" && (
-        <SavedList docs={archiveDocs} empty="No archived leads yet." />
+        <StageBoard
+          columns={[
+            { title: "Not a Fit", docs: byStatus("Not a Fit"), empty: "None." },
+            { title: "Not Interested", docs: byStatus("Not Interested"), empty: "None." },
+            { title: "No Response", docs: byStatus("No Response"), empty: "None." },
+            { title: "Duplicate", docs: byStatus("Duplicate"), empty: "None." },
+            { title: "Wrong Match", docs: byStatus("Wrong Match"), empty: "None." },
+            { title: "Too Advanced / Already Has System", empty: "None." },
+            { title: "Do Not Contact", docs: byStatus("Do Not Contact"), empty: "None." },
+          ]}
+        />
       )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.msg}</div>}
@@ -640,6 +705,128 @@ function SavedLeadCard({ doc }) {
 function SavedList({ docs, empty }) {
   if (!docs || docs.length === 0) return <div className="tab-empty">{empty}</div>;
   return <div className="saved-list">{docs.map((d) => <SavedLeadCard key={d.id} doc={d} />)}</div>;
+}
+
+// Research = quick triage. Lightweight card, no full profile drawer. Star =
+// Save for Review (reuses favorite). Skip is a visual placeholder for now.
+function TriageCard({ lead, index, onFavorite }) {
+  const fav = lead.favorite;
+  return (
+    <div className={`triage-card${fav ? " saved" : ""}`}>
+      <div className="triage-top">
+        <ScoreRing score={lead["Fit Score"]} />
+        <div className="triage-id">
+          <div className="triage-name">{lead["Business Name"]}</div>
+          <span className={`status-pill ${statusSlug(lead["Status"])}`}>{lead["Status"]}</span>
+        </div>
+        <StarButton on={fav} onClick={() => onFavorite(index)} />
+      </div>
+      <div className="triage-facts">
+        <div><span>Category</span>{lead.category || "—"}</div>
+        <div><span>Location</span>{lead["Location"] || "—"}</div>
+        <div><span>Phone</span>{lead["Phone"] || "—"}</div>
+        <div><span>Rating</span>{lead.rating !== "" && lead.rating != null ? `${lead.rating}★` : "—"}</div>
+      </div>
+      <div className="triage-presence">
+        <span className={`pchip${lead["Website"] ? " on" : ""}`}>Web</span>
+        <span className={`pchip${lead["Instagram"] ? " on" : ""}`}>IG</span>
+        <span className={`pchip${lead["Facebook"] ? " on" : ""}`}>FB</span>
+      </div>
+      <div className="triage-actions">
+        <button className="secondary sm" onClick={() => onFavorite(index)}>{fav ? "✓ Saved for Review" : "Save for Review"}</button>
+        <button className="secondary sm" disabled title="Coming soon">Skip</button>
+      </div>
+    </div>
+  );
+}
+
+// Reusable column board for the Follow-Up / Deals / Archive placeholder stages.
+function StageBoard({ columns, note }) {
+  return (
+    <div className="stage-wrap">
+      {note && <div className="stage-note">{note}</div>}
+      <div className="stage-board">
+        {columns.map((col) => (
+          <div className="stage-col" key={col.title}>
+            <div className="stage-col-head">
+              {col.title}
+              {col.docs && col.docs.length ? <span className="stage-count">{col.docs.length}</span> : null}
+            </div>
+            <div className="stage-col-body">
+              {col.docs && col.docs.length
+                ? col.docs.map((d) => <SavedLeadCard key={d.id} doc={d} />)
+                : <div className="stage-empty">{col.empty || "Nothing here yet."}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Contact = outreach workspace (visual placeholder). Left: contact queue from
+// saved "Ready to Contact" leads. Right: mock outreach panel (no auto-send).
+function ContactWorkspace({ docs }) {
+  return (
+    <div className="stage-wrap">
+      <div className="stage-note">Outreach workspace. Pick a lead from the queue, then reach out manually. Nothing is sent automatically.</div>
+      <div className="contact-layout">
+        <div className="contact-queue">
+          <div className="stage-col-head">Contact queue<span className="stage-count">{docs.length}</span></div>
+          <div className="stage-col-body">
+            {docs.length
+              ? docs.map((d) => <SavedLeadCard key={d.id} doc={d} />)
+              : <div className="stage-empty">No leads in the contact queue yet. Move a reviewed lead to Contact.</div>}
+          </div>
+        </div>
+        <div className="contact-panel mock-card">
+          <div className="mock-head">Selected lead</div>
+          <div className="mock-sub">Select a lead from the queue to load its outreach plan.</div>
+          <div className="mock-row"><span>Best first channel</span><b>—</b></div>
+          <div className="mock-row"><span>Personalized hook</span><b>—</b></div>
+          <div className="channel-buttons">
+            {["Call", "Email", "Website Form", "Instagram", "Facebook", "LinkedIn"].map((c) => (
+              <button key={c} className="secondary sm" disabled title="Select a lead first">{c}</button>
+            ))}
+          </div>
+          <div className="mock-title">First message</div><div className="mock-msg">—</div>
+          <div className="mock-title">Follow-up 1</div><div className="mock-msg">—</div>
+          <div className="mock-title">Follow-up 2</div><div className="mock-msg">—</div>
+          <div className="mock-title">Close-the-loop</div><div className="mock-msg">—</div>
+          <button className="btn-approve mock-send" disabled>Mark First Contact Sent</button>
+          <div className="ai-note">Prototype outreach workspace. Message loading and sending come later. Nothing auto-sends.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Funnel Audit Checklist — front-end prototype only, not persisted yet.
+function FunnelAuditChecklist() {
+  const [checked, setChecked] = useState({});
+  const toggle = (k) => setChecked((c) => ({ ...c, [k]: !c[k] }));
+  return (
+    <section className="sec">
+      <div className="sec-head"><h4>Funnel Audit Checklist</h4><Badge kind="review">Prototype</Badge></div>
+      <div className="checklist">
+        {FUNNEL_CHECKLIST.map((grp) => (
+          <div className="checklist-group" key={grp.group}>
+            <div className="checklist-title">{grp.group}</div>
+            {grp.items.map((item) => {
+              const k = `${grp.group}:${item}`;
+              return (
+                <label className="check-item" key={k}>
+                  <input type="checkbox" checked={!!checked[k]} onChange={() => toggle(k)} />
+                  <span>{item}</span>
+                </label>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <div className="ai-note">Prototype checklist. Saving comes later.</div>
+    </section>
+  );
 }
 
 function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus, onFavorite, onNotes }) {
@@ -805,11 +992,11 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
           </div>
           <div className="spacer" />
           <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => onApprove(index)} disabled={approved}>
-            {approved ? "✓ In Ready to Contact" : "Move to Ready to Contact"}
+            {approved ? "✓ In Contact queue" : "Move to Contact"}
           </button>
         </div>
         <div className="lh-move">Best First Move: <strong>{bestFirstMove(lead)}</strong></div>
-        {approved && <div className="approve-help">✓ Now in your Ready to Contact queue.</div>}
+        {approved && <div className="approve-help">✓ Now in your Contact queue.</div>}
         <div className="facts overview-facts">
           <div className="fact"><span>Phone</span>{lead["Phone"] || "—"}</div>
           <div className="fact"><span>Location</span>{lead["Location"] || "—"}</div>
@@ -890,6 +1077,25 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
 
       {/* 5. Qualification Breakdown (collapsed) */}
       <QualificationBreakdown lead={lead} />
+
+      {/* Funnel Audit Checklist — prototype, not saved yet */}
+      <FunnelAuditChecklist />
+
+      {/* Review decision */}
+      <section className="sec">
+        <div className="sec-head"><h4>Review Decision</h4></div>
+        <div className="status-actions">
+          <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => onApprove(index)} disabled={approved}>
+            {approved ? "✓ In Contact queue" : "Move to Contact"}
+          </button>
+          <button className={`secondary sm status-btn${lead["Status"] === "Not a Fit" ? " active" : ""}`} onClick={() => onStatus(index, "Not a Fit")}>
+            {lead["Status"] === "Not a Fit" ? "✓ Archived (Not a Fit)" : "Archive"}
+          </button>
+          <button className={`secondary sm status-btn${lead["Status"] === "Do Not Contact" ? " active" : ""}`} onClick={() => onStatus(index, "Do Not Contact")}>
+            {lead["Status"] === "Do Not Contact" ? "✓ Do Not Contact" : "Do Not Contact"}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

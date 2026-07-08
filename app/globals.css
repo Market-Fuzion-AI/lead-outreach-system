@@ -589,3 +589,53 @@ tr.lead-row.status-approved td:first-child { box-shadow: inset 3px 0 0 var(--acc
 .saved-fact a:hover { text-decoration: underline; }
 .saved-notes { margin-top: 12px; font-size: 12.5px; color: var(--muted); line-height: 1.5; border-top: 1px solid var(--border); padding-top: 10px; }
 .saved-notes > span { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 3px; }
+
+/* ================================================================== *
+ * v9 — stage workflow prototype (triage / boards / contact / checklist)
+ * ================================================================== */
+
+/* Research triage cards */
+.triage-help { font-size: 12.5px; color: var(--muted); margin: 18px 2px 12px; }
+.triage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.triage-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px; box-shadow: var(--shadow); }
+.triage-card.saved { border-color: var(--social); }
+.triage-top { display: flex; align-items: center; gap: 10px; }
+.triage-id { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
+.triage-name { font-size: 14px; font-weight: 650; word-break: break-word; }
+.triage-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 12px; font-size: 12.5px; }
+.triage-facts > div { display: flex; flex-direction: column; }
+.triage-facts span { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+.triage-presence { display: flex; gap: 6px; margin-top: 12px; }
+.pchip { font-size: 10.5px; font-weight: 700; color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; }
+.pchip.on { color: var(--verified); background: var(--verified-bg); border-color: transparent; }
+.triage-actions { display: flex; gap: 8px; margin-top: 14px; }
+.triage-actions button { flex: 1; }
+
+/* Stage boards (Follow-Up / Deals / Archive) */
+.stage-wrap { margin-top: 8px; }
+.stage-note { font-size: 12.5px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; line-height: 1.5; }
+.stage-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; align-items: start; }
+.stage-col { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px; box-shadow: var(--shadow); }
+.stage-col-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-bottom: 10px; }
+.stage-count { font-size: 11px; color: var(--accent); background: var(--accent-weak); border-radius: 999px; padding: 1px 8px; }
+.stage-col-body { display: flex; flex-direction: column; gap: 10px; }
+.stage-empty { font-size: 12.5px; color: var(--muted); text-align: center; padding: 18px 8px; border: 1px dashed var(--border); border-radius: 10px; }
+
+/* Contact workspace */
+.contact-layout { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 16px; align-items: start; }
+@media (max-width: 720px) { .contact-layout { grid-template-columns: 1fr; } }
+.contact-queue, .contact-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px; box-shadow: var(--shadow); }
+.mock-head { font-size: 14px; font-weight: 650; }
+.mock-sub { font-size: 12.5px; color: var(--muted); margin: 4px 0 14px; }
+.mock-row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.mock-row span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+.channel-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.mock-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin: 12px 0 4px; }
+.mock-msg { background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; font-size: 13px; color: var(--muted); }
+.mock-send { margin-top: 14px; }
+
+/* Funnel Audit Checklist */
+.checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.checklist-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+.check-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; cursor: pointer; }
+.check-item input[type="checkbox"] { width: 16px; height: 16px; padding: 0; margin: 0; accent-color: var(--accent); flex-shrink: 0; }
