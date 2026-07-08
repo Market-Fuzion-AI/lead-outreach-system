@@ -6,8 +6,9 @@ import {
 } from "firebase/auth";
 import { toCSV } from "../lib/schema";
 import { mergeSaved } from "../lib/workflow";
+import { getStageForStatus } from "../lib/stages";
 import {
-  isFirebaseConfigured, auth, fetchSavedLeads, saveLead, createUserProfile, touchUserLogin,
+  isFirebaseConfigured, auth, fetchSavedLeads, fetchSavedLeadDocs, saveLead, createUserProfile, touchUserLogin,
 } from "../lib/firebase";
 
 const PRESETS = [
@@ -292,6 +293,7 @@ export default function Page() {
   const [filter, setFilter] = useState("All");
   const [quality, setQuality] = useState("");
   const [tab, setTab] = useState("Research");
+  const [savedLeadDocs, setSavedLeadDocs] = useState([]);
   const [flashId, setFlashId] = useState(null);
   const [theme, setTheme] = useState("light");
   const [user, setUser] = useState(null);
@@ -320,17 +322,27 @@ export default function Page() {
       setAuthReady(true);
       if (u) {
         try {
+          // Compact map (drives search-result merge) — unchanged behavior.
           const map = await fetchSavedLeads(u.uid);
           savedRef.current = map;
           setLeads((prev) => mergeSaved(prev, map).merged);
+          // Full docs for the stage tabs (Ready to Contact / Pipeline / Archive).
+          setSavedLeadDocs(await fetchSavedLeadDocs(u.uid));
         } catch { showToast("Couldn't load saved leads.", "error"); }
       } else {
         savedRef.current = {};
+        setSavedLeadDocs([]);
         setLeads((prev) => mergeSaved(prev, {}).merged);
       }
     });
     return () => unsub();
   }, []);
+
+  // Simple refresh of the full saved docs (used after status moves). No realtime listeners.
+  async function refreshSavedDocs() {
+    if (!user) return;
+    try { setSavedLeadDocs(await fetchSavedLeadDocs(user.uid)); } catch { /* keep current */ }
+  }
 
   function showToast(msg, kind = "ok") { setToast({ msg, kind }); }
   function toggleTheme() {
@@ -393,14 +405,14 @@ export default function Page() {
   function approveLead(index) {
     const lead = leads[index]; if (!lead) return;
     setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Approved To Contact": "YES", "Status": "Ready to Contact", _saved: true } : l)));
-    commitSaved(lead, { approved: true, status: "Ready to Contact" });
+    commitSaved(lead, { approved: true, status: "Ready to Contact" }).then(refreshSavedDocs);
     setFlashId(index);
     setTimeout(() => setFlashId((cur) => (cur === index ? null : cur)), 1300);
   }
   function setStatus(index, status) {
     const lead = leads[index]; if (!lead) return;
     setLeads((prev) => prev.map((l, i) => (i === index ? { ...l, "Status": status, _saved: true } : l)));
-    commitSaved(lead, { status });
+    commitSaved(lead, { status }).then(refreshSavedDocs);
   }
   function setNotes(index, notes) {
     const lead = leads[index]; if (!lead) return;
@@ -430,6 +442,16 @@ export default function Page() {
   }
 
   const shown = leads.map((l, i) => ({ l, i })).filter(({ l }) => matchesFilter(l, filter, quality));
+
+  // Saved leads grouped into stage tabs (by stored status). Unknown statuses map
+  // to Review via getStageForStatus, so they simply don't appear in these three
+  // tabs rather than disappearing/erroring.
+  const readyDocs = savedLeadDocs.filter((d) => getStageForStatus(d.status) === "Ready to Contact");
+  const pipelineDocs = savedLeadDocs.filter((d) => {
+    const st = getStageForStatus(d.status);
+    return st === "Pipeline" || st === "Client / Delivery";
+  });
+  const archiveDocs = savedLeadDocs.filter((d) => getStageForStatus(d.status) === "Archive");
 
   // Researched-leads results (filters + table). Shown under Research and Review.
   const resultsSection = (
@@ -570,18 +592,54 @@ export default function Page() {
       )}
 
       {tab === "Ready to Contact" && (
-        <div className="tab-empty">Ready to Contact queue will show approved leads here.</div>
+        <SavedList docs={readyDocs} empty="No leads ready to contact yet. Move a reviewed lead here first." />
       )}
       {tab === "Pipeline" && (
-        <div className="tab-empty">Pipeline will show contacted leads, follow-ups, booked calls, proposals, and won deals.</div>
+        <SavedList docs={pipelineDocs} empty="No active pipeline leads yet." />
       )}
       {tab === "Archive" && (
-        <div className="tab-empty">Archive will show not-fit, duplicate, no-response, and do-not-contact leads.</div>
+        <SavedList docs={archiveDocs} empty="No archived leads yet." />
       )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.msg}</div>}
     </div>
   );
+}
+
+// Best first move from a saved Firestore doc (camelCase fields).
+function docBestMove(d) {
+  const ch = d.recommendedChannel || "Phone/Text";
+  if (ch === "Instagram DM" && !d.instagram) return d.website ? "Website Form" : "Phone/Text";
+  if (ch === "Facebook Messenger" && !d.facebook) return d.website ? "Website Form" : "Phone/Text";
+  return displayChannel(ch);
+}
+
+// Compact card for a saved lead in the Ready to Contact / Pipeline / Archive tabs.
+function SavedLeadCard({ doc }) {
+  const slug = statusSlug(doc.status);
+  const notes = String(doc.notes || "").trim();
+  return (
+    <div className="saved-card">
+      <div className="saved-head">
+        <ScoreRing score={Number(doc.fitScore) || 0} />
+        <div className="saved-id">
+          <div className="saved-name">{doc.businessName || "Untitled lead"}</div>
+          <span className={`status-pill ${slug}`}>{doc.status || "New"}</span>
+        </div>
+      </div>
+      <div className="saved-facts">
+        <div className="saved-fact"><span>Best first move</span>{docBestMove(doc)}</div>
+        <div className="saved-fact"><span>Phone</span>{doc.phone || "—"}</div>
+        <div className="saved-fact"><span>Website</span>{doc.website ? <a href={extUrl(doc.website)} target="_blank" rel="noreferrer">{hostOf(doc.website)}</a> : "—"}</div>
+      </div>
+      {notes && <div className="saved-notes"><span>Notes</span>{notes.length > 160 ? `${notes.slice(0, 160)}…` : notes}</div>}
+    </div>
+  );
+}
+
+function SavedList({ docs, empty }) {
+  if (!docs || docs.length === 0) return <div className="tab-empty">{empty}</div>;
+  return <div className="saved-list">{docs.map((d) => <SavedLeadCard key={d.id} doc={d} />)}</div>;
 }
 
 function FragmentRow({ lead, index, open, flash, onToggle, onApprove, onStatus, onFavorite, onNotes }) {
