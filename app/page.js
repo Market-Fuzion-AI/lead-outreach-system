@@ -41,6 +41,77 @@ const TAB_BLURB = {
   "Archive": "Leads parked out of the active workflow. Nothing here needs action.",
 };
 
+// Per-stage guide: title + purpose + a short "what to do here" checklist.
+// UI-only prompt; the checklist is ephemeral (not persisted).
+const STAGE_GUIDES = {
+  "Research": {
+    title: "Research Guide",
+    purpose: "Find possible businesses and quickly decide which ones deserve a deeper review.",
+    items: [
+      "Search a focused niche and location",
+      "Scan score, category, rating, and contact signals",
+      "Check Web / IG / FB indicators",
+      "Save promising leads for Review",
+      "Skip weak or irrelevant leads",
+    ],
+  },
+  "Review": {
+    title: "Review Guide",
+    purpose: "Audit saved leads and decide if they are worth contacting.",
+    items: [
+      "Open the business profile",
+      "Check website and social profiles",
+      "Complete the funnel audit checklist",
+      "Confirm the follow-up opportunity",
+      "Move good leads to Contact or archive bad fits",
+    ],
+  },
+  "Contact": {
+    title: "Contact Guide",
+    purpose: "Prepare and send the first manual outreach message.",
+    items: [
+      "Pick the best contact channel",
+      "Review the personalized hook",
+      "Copy or write the first message",
+      "Send manually",
+      "Mark first contact sent",
+    ],
+  },
+  "Follow-Up": {
+    title: "Follow-Up Guide",
+    purpose: "Keep conversations moving so leads do not slip through the cracks.",
+    items: [
+      "Check leads waiting for reply",
+      "Send follow-up 1 after 1–2 days",
+      "Send follow-up 2 after 4–5 days",
+      "Close the loop after 7–10 days",
+      "Move interested leads to Deals",
+    ],
+  },
+  "Deals": {
+    title: "Deals Guide",
+    purpose: "Track sales opportunities after a lead shows interest.",
+    items: [
+      "Book discovery call",
+      "Send Upwork proposal",
+      "Mark won or lost",
+      "Track work in progress",
+      "Request testimonial or referral after delivery",
+    ],
+  },
+  "Archive": {
+    title: "Archive Guide",
+    purpose: "Keep rejected, duplicate, or do-not-contact leads out of the active workflow.",
+    items: [
+      "Confirm the archive reason",
+      "Separate not-now from do-not-contact",
+      "Keep duplicates out of research",
+      "Restore only if appropriate",
+      "Revisit eligible leads later",
+    ],
+  },
+};
+
 // Funnel Audit Checklist groups — front-end prototype only (not persisted yet).
 const FUNNEL_CHECKLIST = [
   { group: "Public Presence", items: ["Website found", "Google Business Profile found", "Instagram found", "Facebook found", "LinkedIn found"] },
@@ -595,6 +666,8 @@ export default function Page() {
         ))}
       </nav>
 
+      <StageGuide key={tab} guide={STAGE_GUIDES[tab]} />
+
       {tab === "Research" && (
         <>
           <div className="panel">
@@ -776,6 +849,29 @@ function TriageCard({ lead, index, onFavorite }) {
       <div className="triage-actions">
         <button className="secondary sm" onClick={() => onFavorite(index)}>{fav ? "✓ Saved for Review" : "Save for Review"}</button>
         <button className="secondary sm" disabled title="Coming soon">Skip</button>
+      </div>
+    </div>
+  );
+}
+
+// Compact per-stage guide card (title + purpose + a "what to do here" checklist).
+// UI-only; the checkboxes are ephemeral (not persisted). Remount per tab resets them.
+function StageGuide({ guide }) {
+  const [done, setDone] = useState({});
+  if (!guide) return null;
+  return (
+    <div className="stage-guide">
+      <div className="sg-head">
+        <span className="sg-title">{guide.title}</span>
+        <span className="sg-purpose">{guide.purpose}</span>
+      </div>
+      <div className="sg-list">
+        {guide.items.map((item, i) => (
+          <label className="sg-item" key={i}>
+            <input type="checkbox" checked={!!done[i]} onChange={() => setDone((d) => ({ ...d, [i]: !d[i] }))} />
+            <span>{item}</span>
+          </label>
+        ))}
       </div>
     </div>
   );

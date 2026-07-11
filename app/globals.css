@@ -679,3 +679,21 @@ tr.lead-row { cursor: pointer; }
 /* Intentional empty states */
 .tab-empty { line-height: 1.6; }
 .tab-empty-ic { font-size: 26px; margin-bottom: 10px; opacity: 0.85; }
+
+/* ================================================================== *
+ * v11 — per-stage guide card
+ * ================================================================== */
+.stage-guide {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  padding: 13px 16px;
+  margin: 4px 0 18px;
+}
+.sg-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 10px; margin-bottom: 10px; }
+.sg-title { font-size: 13px; font-weight: 700; letter-spacing: 0.01em; }
+.sg-purpose { font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.sg-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 3px 18px; }
+.sg-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); padding: 3px 0; cursor: pointer; }
+.sg-item input[type="checkbox"] { width: 15px; height: 15px; padding: 0; margin: 0; accent-color: var(--accent); flex-shrink: 0; }
