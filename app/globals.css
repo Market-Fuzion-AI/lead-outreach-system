@@ -634,6 +634,20 @@ tr.lead-row.status-approved td:first-child { box-shadow: inset 3px 0 0 var(--acc
 .mock-msg { background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; font-size: 13px; color: var(--muted); }
 .mock-send { margin-top: 14px; }
 
+/* Selectable contact-queue cards + active state */
+.saved-card.selectable { cursor: pointer; }
+.saved-card.selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 3px 0 var(--accent-top, var(--border-strong)), 0 0 0 2px var(--accent-weak), var(--shadow);
+}
+.saved-card.selected:hover {
+  box-shadow: inset 0 3px 0 var(--accent-top, var(--border-strong)), 0 0 0 2px var(--accent-weak), 0 10px 26px rgba(16,24,40,0.12);
+}
+.contact-detail-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.contact-detail-id { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mock-row b a { color: var(--accent); text-decoration: none; }
+.mock-row b a:hover { text-decoration: underline; }
+
 /* Funnel Audit Checklist */
 .checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
 .checklist-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }

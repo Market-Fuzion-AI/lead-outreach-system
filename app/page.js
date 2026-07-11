@@ -794,11 +794,22 @@ function docBestMove(d) {
 }
 
 // Compact card for a saved lead in the Ready to Contact / Pipeline / Archive tabs.
-function SavedLeadCard({ doc }) {
+// When `onClick` is passed (Contact queue) the card becomes a selectable button
+// with an active state; other callers render the plain, non-interactive card.
+function SavedLeadCard({ doc, selected, onClick }) {
   const slug = statusSlug(doc.status);
   const notes = String(doc.notes || "").trim();
+  const clickable = typeof onClick === "function";
   return (
-    <div className="saved-card" style={{ "--accent-top": statusAccent(doc.status) }}>
+    <div
+      className={`saved-card${clickable ? " selectable" : ""}${selected ? " selected" : ""}`}
+      style={{ "--accent-top": statusAccent(doc.status) }}
+      onClick={onClick}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-pressed={clickable ? !!selected : undefined}
+      onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+    >
       <div className="saved-head">
         <ScoreRing score={Number(doc.fitScore) || 0} />
         <div className="saved-id">
@@ -916,9 +927,15 @@ function StageBoard({ icon, title, subtitle, columns, note }) {
   );
 }
 
-// Contact = outreach workspace (visual placeholder). Left: contact queue from
-// saved "Ready to Contact" leads. Right: mock outreach panel (no auto-send).
+// Contact = outreach workspace. Left: contact queue from saved "Ready to
+// Contact" leads (membership logic unchanged). Right: the selected lead's real
+// saved outreach data. Manual only — nothing is sent automatically.
 function ContactWorkspace({ docs }) {
+  const [selectedId, setSelectedId] = useState(null);
+  // Resolve against the live queue so a lead that leaves Contact (status change)
+  // falls back to the empty state instead of showing stale data.
+  const selected = docs.find((d) => d.id === selectedId) || null;
+
   return (
     <div className="stage-wrap">
       <StageHeader icon="💬" title="Contact" subtitle="Your outreach workspace. Reach out manually — nothing is sent automatically." />
@@ -927,28 +944,87 @@ function ContactWorkspace({ docs }) {
           <div className="stage-col-head">Contact queue<span className="stage-count">{docs.length}</span></div>
           <div className="stage-col-body">
             {docs.length
-              ? docs.map((d) => <SavedLeadCard key={d.id} doc={d} />)
+              ? docs.map((d) => (
+                  <SavedLeadCard
+                    key={d.id} doc={d}
+                    selected={d.id === selectedId}
+                    onClick={() => setSelectedId(d.id)}
+                  />
+                ))
               : <div className="stage-empty">No leads in the contact queue yet. Move a reviewed lead to Contact.</div>}
           </div>
         </div>
-        <div className="contact-panel mock-card">
-          <div className="mock-head">Selected lead</div>
-          <div className="mock-sub">Select a lead from the queue to load its outreach plan.</div>
-          <div className="mock-row"><span>Best first channel</span><b>—</b></div>
-          <div className="mock-row"><span>Personalized hook</span><b>—</b></div>
-          <div className="channel-buttons">
-            {["Call", "Email", "Website Form", "Instagram", "Facebook", "LinkedIn"].map((c) => (
-              <button key={c} className="secondary sm" disabled title="Select a lead first">{c}</button>
-            ))}
-          </div>
-          <div className="mock-title">First message</div><div className="mock-msg">—</div>
-          <div className="mock-title">Follow-up 1</div><div className="mock-msg">—</div>
-          <div className="mock-title">Follow-up 2</div><div className="mock-msg">—</div>
-          <div className="mock-title">Close-the-loop</div><div className="mock-msg">—</div>
-          <button className="btn-approve mock-send" disabled>Mark First Contact Sent</button>
-          <div className="ai-note">Prototype outreach workspace. Message loading and sending come later. Nothing auto-sends.</div>
+        {selected
+          ? <ContactDetail doc={selected} />
+          : (
+            <div className="contact-panel mock-card">
+              <div className="mock-head">Selected lead</div>
+              <div className="mock-sub">Select a lead from the queue to prepare outreach.</div>
+            </div>
+          )}
+      </div>
+    </div>
+  );
+}
+
+// Right-hand outreach panel for the selected Contact lead. Reads only real saved
+// data from the Firestore doc; channel buttons use existing contact data and
+// message copy reuses the shared CopyButton (via Draft). Nothing auto-sends.
+function ContactDetail({ doc }) {
+  const slug = statusSlug(doc.status);
+  const score = Number(doc.fitScore) || 0;
+  const move = docBestMove(doc);
+  const channel = displayChannel(doc.recommendedChannel) || "—";
+  const notes = String(doc.notes || "").trim();
+
+  // Only real, present data enables a channel; everything else is a placeholder.
+  const channels = [
+    { label: "Call", href: doc.phone ? `tel:${doc.phone}` : null },
+    { label: "Website", href: doc.website ? extUrl(doc.website) : null, ext: true },
+    { label: "Instagram", href: doc.instagram ? extUrl(doc.instagram) : null, ext: true },
+    { label: "Facebook", href: doc.facebook ? extUrl(doc.facebook) : null, ext: true },
+    { label: "Email", href: doc.email ? `mailto:${doc.email}` : null },
+    { label: "LinkedIn", href: null },
+  ];
+
+  return (
+    <div className="contact-panel mock-card">
+      <div className="contact-detail-head">
+        {score > 0 && <ScoreRing score={score} size={56} showLabel />}
+        <div className="contact-detail-id">
+          <div className="mock-head">{doc.businessName || "Untitled lead"}</div>
+          <span className={`status-pill ${slug}`}>{doc.status || "New"}</span>
         </div>
       </div>
+
+      <div className="mock-row"><span>Best first move</span><b>{move}</b></div>
+      <div className="mock-row"><span>Best channel</span><b>{channel}</b></div>
+      <div className="mock-row"><span>Phone</span><b>{doc.phone || "—"}</b></div>
+      <div className="mock-row"><span>Website</span><b>{doc.website ? <a href={extUrl(doc.website)} target="_blank" rel="noreferrer">{hostOf(doc.website)}</a> : "—"}</b></div>
+      <div className="mock-row"><span>Instagram</span><b>{doc.instagram ? <a href={extUrl(doc.instagram)} target="_blank" rel="noreferrer">Open</a> : "—"}</b></div>
+      <div className="mock-row"><span>Facebook</span><b>{doc.facebook ? <a href={extUrl(doc.facebook)} target="_blank" rel="noreferrer">Open</a> : "—"}</b></div>
+
+      <div className="channel-buttons">
+        {channels.map((c) => (
+          c.href
+            ? <a key={c.label} className="btn-link sm" href={c.href} {...(c.ext ? { target: "_blank", rel: "noreferrer" } : {})}>{c.label}</a>
+            : <button key={c.label} className="secondary sm" disabled title="No data for this channel">{c.label}</button>
+        ))}
+      </div>
+
+      <Draft title="First Message" text={doc.firstMessage} />
+      <Draft title="Follow-Up 1" text={doc.followUp1} />
+      <Draft title="Follow-Up 2" text={doc.followUp2} />
+      <Draft title="Close-The-Loop" text={doc.closeTheLoop} />
+
+      {notes && (
+        <>
+          <div className="mock-title">Private notes</div>
+          <div className="mock-msg">{notes.length > 200 ? `${notes.slice(0, 200)}…` : notes}</div>
+        </>
+      )}
+
+      <div className="ai-note">Prepared from this lead's saved data. Review, copy, and reach out manually — nothing is sent automatically.</div>
     </div>
   );
 }
