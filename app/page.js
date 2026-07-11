@@ -1015,9 +1015,11 @@ function StageBoard({ icon, title, subtitle, columns, note, cardActions, onMove 
 // saved outreach data. Manual only — nothing is sent automatically.
 function ContactWorkspace({ docs, onMove }) {
   const [selectedId, setSelectedId] = useState(null);
-  // Resolve against the live queue so a lead that leaves Contact (status change)
-  // falls back to the empty state instead of showing stale data.
-  const selected = docs.find((d) => d.id === selectedId) || null;
+  // Resolve against the live queue, defaulting to the first doc. This auto-selects
+  // the first lead when nothing is picked and, when the selected lead leaves the
+  // queue (status change), falls through to the next available doc. Empty queue
+  // resolves to null and shows the empty state.
+  const selected = docs.find((d) => d.id === selectedId) || docs[0] || null;
 
   return (
     <div className="stage-wrap">
@@ -1030,7 +1032,7 @@ function ContactWorkspace({ docs, onMove }) {
               ? docs.map((d) => (
                   <SavedLeadCard
                     key={d.id} doc={d}
-                    selected={d.id === selectedId}
+                    selected={d.id === selected?.id}
                     onClick={() => setSelectedId(d.id)}
                   />
                 ))
