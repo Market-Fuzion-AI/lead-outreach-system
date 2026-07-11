@@ -589,6 +589,7 @@ tr.lead-row.status-approved td:first-child { box-shadow: inset 3px 0 0 var(--acc
 .saved-fact a:hover { text-decoration: underline; }
 .saved-notes { margin-top: 12px; font-size: 12.5px; color: var(--muted); line-height: 1.5; border-top: 1px solid var(--border); padding-top: 10px; }
 .saved-notes > span { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 3px; }
+.saved-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
 
 /* ================================================================== *
  * v9 — stage workflow prototype (triage / boards / contact / checklist)

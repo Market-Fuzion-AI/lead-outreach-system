@@ -525,6 +525,12 @@ export default function Page() {
     clearTimeout(notesTimer.current);
     notesTimer.current = setTimeout(() => commitSaved({ ...lead, notes }, { notes }), 700);
   }
+  // Move a saved lead (Firestore doc from the stage tabs) to a new status. Reuses
+  // the existing commitSaved/saveLead flow via docToLead, then refreshes the docs.
+  function moveDocStatus(doc, status) {
+    if (!doc || doc.status === status) return;
+    commitSaved(docToLead(doc), { status }).then(refreshSavedDocs);
+  }
 
   function exportCSV() {
     const csv = toCSV(leads);
@@ -736,12 +742,13 @@ export default function Page() {
           )
       )}
 
-      {tab === "Contact" && <ContactWorkspace docs={readyDocs} />}
+      {tab === "Contact" && <ContactWorkspace docs={readyDocs} onMove={moveDocStatus} />}
 
       {tab === "Follow-Up" && (
         <StageBoard
           icon="🔁" title="Follow-Up" subtitle={TAB_BLURB["Follow-Up"]}
           note="Suggested timing: Day 0 first contact · Day 1–2 follow-up 1 · Day 4–5 follow-up 2 · Day 7–10 close-the-loop."
+          cardActions={FOLLOWUP_MOVES} onMove={moveDocStatus}
           columns={[
             { title: "Waiting for reply", hint: "Sent, awaiting a response.", empty: "No leads waiting yet." },
             { title: "Follow-up due", hint: "Time for the next nudge.", docs: pipelineDocs, empty: "No follow-ups due." },
@@ -793,13 +800,71 @@ function docBestMove(d) {
   return displayChannel(ch);
 }
 
+// Rebuild the in-memory lead shape from a saved Firestore doc so stage-tab status
+// moves can reuse the existing commitSaved/saveLead flow. Inverse of leadToDoc
+// (lib/firebase.js): every public field is read back from the doc, so the merge
+// write reproduces stored data unchanged and only the patched status differs.
+function docToLead(d) {
+  return {
+    _key: d.id,
+    _saved: true,
+    "Business Name": d.businessName || "",
+    category: d.category || "",
+    "Location": d.location || "",
+    "Phone": d.phone || "",
+    "Website": d.website || "",
+    "Instagram": d.instagram || "",
+    "Facebook": d.facebook || "",
+    "Email": d.email || "",
+    rating: d.rating ?? "",
+    reviews: d.reviews ?? "",
+    "Lead Source": d.source || "",
+    "Fit Score": d.fitScore ?? 0,
+    "Lead Temperature": d.temperature || "",
+    "Trust Level": d.trustLevel || "",
+    "Confidence Score": d.confidenceScore ?? 0,
+    "Recommended Channel": d.recommendedChannel || "",
+    opportunity: {
+      problem: d.opportunityProblem || d.whyThisLead || "",
+      offer: d.opportunityOffer || "",
+      why: d.opportunityWhy || "",
+      firstOffer: d.opportunityFirstOffer || "",
+    },
+    "First Message": d.firstMessage || "",
+    "Follow-Up 1": d.followUp1 || "",
+    "Follow-Up 2": d.followUp2 || "",
+    "Close-The-Loop Message": d.closeTheLoop || "",
+    "Approved To Contact": d.approved ? "YES" : "",
+    favorite: !!d.favorite,
+    "Status": d.status || "New",
+    notes: d.notes || "",
+  };
+}
+
+// Stage-movement button sets (label + target status). Statuses map to stages via
+// lib/stages.js, so a move can carry a lead into another tab.
+const CONTACT_MOVES = [
+  { label: "Mark First Contact Sent", status: "Contacted" },
+  { label: "Needs Follow-Up", status: "Follow-Up Needed" },
+  { label: "Booked Call", status: "Booked Call" },
+  { label: "Not a Fit", status: "Not a Fit" },
+  { label: "Do Not Contact", status: "Do Not Contact" },
+];
+const FOLLOWUP_MOVES = [
+  { label: "Booked Call", status: "Booked Call" },
+  { label: "No Response", status: "No Response" },
+  { label: "Not Interested", status: "Not Interested" },
+  { label: "Do Not Contact", status: "Do Not Contact" },
+];
+
 // Compact card for a saved lead in the Ready to Contact / Pipeline / Archive tabs.
 // When `onClick` is passed (Contact queue) the card becomes a selectable button
 // with an active state; other callers render the plain, non-interactive card.
-function SavedLeadCard({ doc, selected, onClick }) {
+function SavedLeadCard({ doc, selected, onClick, actions, onMove }) {
   const slug = statusSlug(doc.status);
   const notes = String(doc.notes || "").trim();
   const clickable = typeof onClick === "function";
+  const hasActions = Array.isArray(actions) && actions.length > 0 && typeof onMove === "function";
   return (
     <div
       className={`saved-card${clickable ? " selectable" : ""}${selected ? " selected" : ""}`}
@@ -823,6 +888,22 @@ function SavedLeadCard({ doc, selected, onClick }) {
         <div className="saved-fact"><span>Website</span>{doc.website ? <a href={extUrl(doc.website)} target="_blank" rel="noreferrer">{hostOf(doc.website)}</a> : "—"}</div>
       </div>
       {notes && <div className="saved-notes"><span>Notes</span>{notes.length > 160 ? `${notes.slice(0, 160)}…` : notes}</div>}
+      {hasActions && (
+        <div className="saved-actions">
+          {actions.map((a) => {
+            const active = doc.status === a.status;
+            return (
+              <button
+                key={a.status}
+                className={`secondary sm status-btn${active ? " active" : ""}`}
+                onClick={(e) => { e.stopPropagation(); onMove(doc, a.status); }}
+              >
+                {active ? `✓ ${a.label}` : a.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -902,7 +983,9 @@ function StageHeader({ icon, title, subtitle }) {
 }
 
 // Reusable column board for the Follow-Up / Deals / Archive placeholder stages.
-function StageBoard({ icon, title, subtitle, columns, note }) {
+// `cardActions` (+ `onMove`) optionally add compact status-move buttons to every
+// card the board renders; boards without them stay display-only.
+function StageBoard({ icon, title, subtitle, columns, note, cardActions, onMove }) {
   return (
     <div className="stage-wrap">
       {title && <StageHeader icon={icon} title={title} subtitle={subtitle} />}
@@ -917,7 +1000,7 @@ function StageBoard({ icon, title, subtitle, columns, note }) {
             {col.hint && <div className="stage-col-hint">{col.hint}</div>}
             <div className="stage-col-body">
               {col.docs && col.docs.length
-                ? col.docs.map((d) => <SavedLeadCard key={d.id} doc={d} />)
+                ? col.docs.map((d) => <SavedLeadCard key={d.id} doc={d} actions={cardActions} onMove={onMove} />)
                 : <div className="stage-empty">{col.empty || "Nothing here yet."}</div>}
             </div>
           </div>
@@ -930,7 +1013,7 @@ function StageBoard({ icon, title, subtitle, columns, note }) {
 // Contact = outreach workspace. Left: contact queue from saved "Ready to
 // Contact" leads (membership logic unchanged). Right: the selected lead's real
 // saved outreach data. Manual only — nothing is sent automatically.
-function ContactWorkspace({ docs }) {
+function ContactWorkspace({ docs, onMove }) {
   const [selectedId, setSelectedId] = useState(null);
   // Resolve against the live queue so a lead that leaves Contact (status change)
   // falls back to the empty state instead of showing stale data.
@@ -955,7 +1038,7 @@ function ContactWorkspace({ docs }) {
           </div>
         </div>
         {selected
-          ? <ContactDetail doc={selected} />
+          ? <ContactDetail doc={selected} onMove={onMove} />
           : (
             <div className="contact-panel mock-card">
               <div className="mock-head">Selected lead</div>
@@ -970,7 +1053,7 @@ function ContactWorkspace({ docs }) {
 // Right-hand outreach panel for the selected Contact lead. Reads only real saved
 // data from the Firestore doc; channel buttons use existing contact data and
 // message copy reuses the shared CopyButton (via Draft). Nothing auto-sends.
-function ContactDetail({ doc }) {
+function ContactDetail({ doc, onMove }) {
   const slug = statusSlug(doc.status);
   const score = Number(doc.fitScore) || 0;
   const move = docBestMove(doc);
@@ -1021,6 +1104,26 @@ function ContactDetail({ doc }) {
         <>
           <div className="mock-title">Private notes</div>
           <div className="mock-msg">{notes.length > 200 ? `${notes.slice(0, 200)}…` : notes}</div>
+        </>
+      )}
+
+      {typeof onMove === "function" && (
+        <>
+          <div className="mock-title">Move this lead</div>
+          <div className="status-actions">
+            {CONTACT_MOVES.map((m) => {
+              const active = doc.status === m.status;
+              return (
+                <button
+                  key={m.status}
+                  className={`secondary sm status-btn${active ? " active" : ""}`}
+                  onClick={() => onMove(doc, m.status)}
+                >
+                  {active ? `✓ ${m.label}` : m.label}
+                </button>
+              );
+            })}
+          </div>
         </>
       )}
 
@@ -1312,6 +1415,7 @@ function EvidenceDrawer({ lead, index, onApprove, onStatus, onFavorite, onNotes 
       {/* Review decision */}
       <section className="sec">
         <div className="sec-head"><h4>Review Decision</h4></div>
+        <div className="move-why">Move this lead to the next stage: Contact, Archive, or Do Not Contact.</div>
         <div className="status-actions">
           <button className={`btn-approve${approved ? " done" : ""}`} onClick={() => onApprove(index)} disabled={approved}>
             {approved ? "✓ In Contact queue" : "Move to Contact"}
